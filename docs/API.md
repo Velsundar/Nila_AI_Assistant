@@ -26,3 +26,22 @@ Errors: `{ "error": { "code": "VALIDATION_ERROR" | "UNAUTHORIZED" | "NOT_FOUND" 
 | POST | /api/agent | AgentRequest | AgentResponse |
 
 Clients should use `createApiClient()` from `@nova/shared` instead of raw fetch.
+
+## v2: personal assistant (tasks, notes, briefing, reports, receipts, voice)
+
+| Method | Path | Body / Query | Response |
+|---|---|---|---|
+| GET | /api/tasks | ?list&done=true\|false | `{ tasks }`: open first, then by dueDate |
+| POST | /api/tasks | CreateTaskInput | `{ task }` (201) |
+| PATCH | /api/tasks/:id | UpdateTaskInput | `{ task }` (sets/clears completedAt with done) |
+| DELETE | /api/tasks/:id | — | 204 |
+| GET | /api/notes | ?q (text search) | `{ notes }` newest first |
+| POST | /api/notes | CreateNoteInput | `{ note }` (201) |
+| PATCH | /api/notes/:id | CreateNoteInput | `{ note }` |
+| DELETE | /api/notes/:id | — | 204 |
+| GET | /api/briefing | ?tz | DailyBriefing |
+| GET | /api/reports/weekly | ?weekStart=YYYY-MM-DD&tz (default: the last completed Mon–Sun week) | WeeklyReport |
+| POST | /api/receipts/scan | ScanReceiptInput (JSON, up to ~6 MB body) | ReceiptScanResult |
+| POST | /api/transcribe | TranscribeInput (JSON, up to ~14 MB body) | `{ text }` |
+
+`PATCH /api/auth/me` also accepts `city`; `User` includes `city`.

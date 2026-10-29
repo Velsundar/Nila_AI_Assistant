@@ -33,6 +33,8 @@ export const UserSchema = z.object({
   email: z.string().email(),
   currency: z.string().default(DEFAULT_CURRENCY),
   assistantName: z.string().default(ASSISTANT_NAME),
+  /** Home city for weather in the daily briefing. The server geocodes it. */
+  city: z.string().optional(),
   createdAt: isoDate,
 });
 export type User = z.infer<typeof UserSchema>;
@@ -56,6 +58,8 @@ export const UpdateMeSchema = z.object({
   name: z.string().min(1).max(80).optional(),
   currency: z.string().length(3).optional(),
   assistantName: z.string().min(1).max(30).optional(),
+  /** Empty string clears it. Unknown city → 400 VALIDATION_ERROR. */
+  city: z.string().max(80).optional(),
 });
 export type UpdateMeInput = z.infer<typeof UpdateMeSchema>;
 
@@ -137,6 +141,121 @@ export type Reminder = {
   done: boolean;
   createdAt: string;
 };
+
+// ---------- Tasks (to-dos and lists, e.g. "Shopping") ----------
+
+export const TaskPrioritySchema = z.enum(["low", "normal", "high"]);
+export type TaskPriority = z.infer<typeof TaskPrioritySchema>;
+
+export const DEFAULT_TASK_LIST = "Inbox";
+
+export type Task = {
+  id: string;
+  title: string;
+  /** List name, e.g. "Inbox", "Shopping", "Work". Case-insensitive match on the server. */
+  list: string;
+  dueDate?: string;
+  priority: TaskPriority;
+  done: boolean;
+  completedAt?: string;
+  createdAt: string;
+};
+
+export const CreateTaskSchema = z.object({
+  title: z.string().min(1).max(200),
+  list: z.string().min(1).max(40).default(DEFAULT_TASK_LIST),
+  dueDate: isoDate.optional(),
+  priority: TaskPrioritySchema.default("normal"),
+});
+export type CreateTaskInput = z.input<typeof CreateTaskSchema>;
+
+export const UpdateTaskSchema = z.object({
+  title: z.string().min(1).max(200).optional(),
+  list: z.string().min(1).max(40).optional(),
+  dueDate: isoDate.nullable().optional(), // null clears it
+  priority: TaskPrioritySchema.optional(),
+  done: z.boolean().optional(),
+});
+export type UpdateTaskInput = z.input<typeof UpdateTaskSchema>;
+
+export const TaskQuerySchema = z.object({
+  list: z.string().optional(),
+  done: z.enum(["true", "false"]).optional(),
+});
+export type TaskQuery = z.input<typeof TaskQuerySchema>;
+
+// ---------- Notes ----------
+
+export type Note = { id: string; text: string; createdAt: string; updatedAt: string };
+
+export const CreateNoteSchema = z.object({ text: z.string().min(1).max(5000) });
+export type CreateNoteInput = z.infer<typeof CreateNoteSchema>;
+
+// ---------- Daily briefing & weekly report ----------
+
+export type Weather = {
+  city: string;
+  tempC: number;
+  condition: string; // e.g. "Light rain"
+  highC: number;
+  lowC: number;
+  rainChance: number; // 0-100
+};
+
+export type DailyBriefing = {
+  /** Spoken-style briefing, ready for TTS. */
+  text: string;
+  date: string; // YYYY-MM-DD in the user's timezone
+  weather?: Weather; // absent if the user has no city or the weather service failed
+  reminders: Reminder[]; // due today
+  tasksDue: Task[]; // open tasks due today or overdue
+  spentYesterday: number;
+  spentThisMonth: number;
+  budgetAlerts: BudgetStatus[]; // budgets at >= 80%
+};
+
+export type WeeklyReport = {
+  /** Spoken-style summary, ready for TTS. */
+  text: string;
+  weekStart: string; // YYYY-MM-DD (Monday)
+  weekEnd: string; // YYYY-MM-DD (Sunday)
+  total: number;
+  previousTotal: number;
+  /** null when the previous week had no spending. */
+  changePercent: number | null;
+  byCategory: { category: Category; total: number; count: number }[];
+  topMerchants: { merchant: string; total: number; count: number }[];
+};
+
+// ---------- Receipt scanning ----------
+
+export const ScanReceiptSchema = z.object({
+  /** Image as a data URL: "data:image/jpeg;base64,...". Max ~4 MB decoded. */
+  image: z.string().startsWith("data:image/"),
+});
+export type ScanReceiptInput = z.infer<typeof ScanReceiptSchema>;
+
+export type ReceiptScanResult = {
+  /** Prefill for the add-expense form. The client asks the user to confirm before saving. */
+  draft: {
+    amount?: number;
+    merchant?: string;
+    date?: string;
+    category?: Category;
+    note?: string;
+  };
+  confidence: "high" | "medium" | "low";
+};
+
+// ---------- Server-side speech-to-text (fallback when on-device STT is unavailable) ----------
+
+export const TranscribeSchema = z.object({
+  /** Audio as a data URL, e.g. "data:audio/webm;base64,..." or "data:audio/m4a;base64,...". Max ~10 MB decoded. */
+  audio: z.string().startsWith("data:audio/"),
+  /** ISO-639-1, e.g. "en". */
+  language: z.string().min(2).max(5).optional(),
+});
+export type TranscribeInput = z.infer<typeof TranscribeSchema>;
 
 // ---------- Agent (voice assistant) ----------
 

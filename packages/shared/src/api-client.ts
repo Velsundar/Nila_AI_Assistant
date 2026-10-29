@@ -5,17 +5,28 @@ import type {
   AuthResponse,
   BudgetStatus,
   CreateExpenseInput,
+  CreateNoteInput,
   CreateReminderInput,
+  CreateTaskInput,
+  DailyBriefing,
   Expense,
   ExpenseQuery,
   LoginInput,
+  Note,
+  ReceiptScanResult,
   RegisterInput,
   Reminder,
+  ScanReceiptInput,
   SpendingSummary,
+  Task,
+  TaskQuery,
+  TranscribeInput,
   UpdateExpenseInput,
   UpdateMeInput,
+  UpdateTaskInput,
   UpsertBudgetInput,
   User,
+  WeeklyReport,
 } from "./schemas";
 
 export class ApiError extends Error {
@@ -92,6 +103,31 @@ export function createApiClient({ baseUrl, getToken, onUnauthorized }: ApiClient
       setDone: (id: string, done: boolean) =>
         request<{ reminder: Reminder }>("PATCH", `/reminders/${id}`, { done }),
       remove: (id: string) => request<void>("DELETE", `/reminders/${id}`),
+    },
+    tasks: {
+      list: (query: TaskQuery = {}) => request<{ tasks: Task[] }>("GET", `/tasks${qs(query)}`),
+      create: (input: CreateTaskInput) => request<{ task: Task }>("POST", "/tasks", input),
+      update: (id: string, input: UpdateTaskInput) => request<{ task: Task }>("PATCH", `/tasks/${id}`, input),
+      remove: (id: string) => request<void>("DELETE", `/tasks/${id}`),
+    },
+    notes: {
+      list: (query: { q?: string } = {}) => request<{ notes: Note[] }>("GET", `/notes${qs(query)}`),
+      create: (input: CreateNoteInput) => request<{ note: Note }>("POST", "/notes", input),
+      update: (id: string, input: CreateNoteInput) => request<{ note: Note }>("PATCH", `/notes/${id}`, input),
+      remove: (id: string) => request<void>("DELETE", `/notes/${id}`),
+    },
+    briefing: {
+      today: (query: { tz?: string } = {}) => request<DailyBriefing>("GET", `/briefing${qs(query)}`),
+    },
+    reports: {
+      weekly: (query: { weekStart?: string; tz?: string } = {}) =>
+        request<WeeklyReport>("GET", `/reports/weekly${qs(query)}`),
+    },
+    receipts: {
+      scan: (input: ScanReceiptInput) => request<ReceiptScanResult>("POST", "/receipts/scan", input),
+    },
+    voice: {
+      transcribe: (input: TranscribeInput) => request<{ text: string }>("POST", "/transcribe", input),
     },
     agent: {
       send: (input: AgentRequest) => request<AgentResponse>("POST", "/agent", input),

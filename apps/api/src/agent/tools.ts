@@ -311,7 +311,9 @@ export const TOOLS: Tool[] = [
 export const TOOL_MAP = new Map(TOOLS.map((t) => [t.name, t]));
 
 function jsonSchemaFor(schema: ZodTypeAny): Record<string, unknown> {
-  const js = zodToJsonSchema(schema, { $refStrategy: "none", target: "openApi3", pipeStrategy: "input" }) as Record<string, unknown>;
+  // jsonSchema7, not openApi3: OpenAPI 3.0 emits boolean `exclusiveMinimum`, which providers that
+  // validate against JSON Schema 2020-12 (e.g. Groq) reject.
+  const js = zodToJsonSchema(schema, { $refStrategy: "none", target: "jsonSchema7", pipeStrategy: "input" }) as Record<string, unknown>;
   delete js.$schema;
   delete js.additionalProperties;
   if (!js.type) js.type = "object";
