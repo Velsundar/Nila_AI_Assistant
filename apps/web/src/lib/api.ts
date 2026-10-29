@@ -28,9 +28,24 @@ export const api = createApiClient({
   onUnauthorized: () => unauthorizedHandler?.(),
 });
 
+/** Friendlier wording for API error codes the user can act on. */
+const CODE_MESSAGES: Record<string, string> = {
+  PAYLOAD_TOO_LARGE: "That file is too large to upload. Try a smaller photo or a shorter recording.",
+  GEOCODING_UNAVAILABLE: "The city lookup service isn't responding right now. Try saving your city again in a few minutes.",
+  STT_RATE_LIMITED: "Too many voice requests just now. Wait a few seconds and try again, or type instead.",
+  STT_BAD_AUDIO: "I couldn't use that recording. Try again, holding the mic while you speak.",
+  STT_FAILED: "Transcription failed this time. Try again, or type your message.",
+  STT_UNAVAILABLE: "Voice transcription isn't available right now. Type your message instead.",
+  RATE_LIMITED: "Too many requests. Wait a moment and try again.",
+};
+
 /** Human-readable message for any thrown value (ApiError, network failure, …). */
 export function errorMessage(err: unknown): string {
-  if (err instanceof ApiError) return err.message || `Request failed (${err.status})`;
+  if (err instanceof ApiError) {
+    if (CODE_MESSAGES[err.code]) return CODE_MESSAGES[err.code];
+    if (err.status === 413) return CODE_MESSAGES.PAYLOAD_TOO_LARGE;
+    return err.message || `Request failed (${err.status})`;
+  }
   if (err instanceof TypeError) return `Can't reach the Nova API at ${API_URL}. Is it running?`;
   if (err instanceof Error) return err.message;
   return "Something went wrong.";

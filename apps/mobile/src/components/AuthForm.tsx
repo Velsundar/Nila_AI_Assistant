@@ -15,7 +15,7 @@ import { ASSISTANT_NAME, LoginSchema, RegisterSchema } from "@nova/shared";
 import { Orb } from "@/components/Orb";
 import { Banner, Button, TextField } from "@/components/ui";
 import { Colors, Font, Spacing } from "@/constants/theme";
-import { API_BASE_URL, errorMessage } from "@/lib/api";
+import { API_BASE_URL, API_CONFIG_ERROR, errorMessage } from "@/lib/api";
 import { useAuth } from "@/lib/auth";
 
 export function AuthForm({ mode }: { mode: "login" | "register" }) {
@@ -107,6 +107,7 @@ export function AuthForm({ mode }: { mode: "login" | "register" }) {
               placeholder={isRegister ? "At least 8 characters" : "••••••••"}
             />
 
+            {API_CONFIG_ERROR && <Banner tone="error" text={API_CONFIG_ERROR} />}
             {error && <Banner tone="error" text={error} onDismiss={() => setError(null)} />}
 
             <Button title={isRegister ? "Create account" : "Sign in"} loading={busy} onPress={() => submit()} />

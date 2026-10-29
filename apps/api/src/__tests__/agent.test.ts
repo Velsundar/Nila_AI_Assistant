@@ -142,7 +142,7 @@ describe("POST /api/agent (mock provider)", () => {
   it("remembers facts and keeps conversation history capped", async () => {
     const { auth } = await registerUser("Meera");
     const r = await agent(auth, "remember that my salary comes on the 1st");
-    expect(r.actions[0]).toMatchObject({ tool: "rememberFact", ok: true, args: { fact: "my salary comes on the 1st" } });
+    expect(r.actions[0]).toMatchObject({ tool: "manageMemory", ok: true, args: { action: "save", fact: "my salary comes on the 1st" } });
     const recall = await agent(auth, "what do you know about me", r.conversationId);
     expect(recall.reply).toContain("my salary comes on the 1st");
     expect(recall.conversationId).toBe(r.conversationId);

@@ -8,6 +8,7 @@ import { useAuth } from "./AuthProvider";
 import { FullScreenLoader } from "./ui";
 
 const NAV = [
+  { href: "/today", label: "Today", icon: "M7 3v3m10-3v3M4 9h16M5 5h14a1 1 0 0 1 1 1v13a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V6a1 1 0 0 1 1-1Zm4 9 2 2 4-4" },
   { href: "/assistant", label: "Assistant", icon: "M12 3a3 3 0 0 0-3 3v6a3 3 0 0 0 6 0V6a3 3 0 0 0-3-3Zm7 9a7 7 0 0 1-14 0m7 7v2" },
   { href: "/dashboard", label: "Dashboard", icon: "M4 20V10m6 10V4m6 16v-7m4 7H2" },
   { href: "/settings", label: "Settings", icon: "M12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6Zm7.4-3a7.4 7.4 0 0 0-.1-1.2l2-1.6-2-3.4-2.4 1a7.5 7.5 0 0 0-2-1.2L14.5 3h-4l-.4 2.6a7.5 7.5 0 0 0-2 1.2l-2.4-1-2 3.4 2 1.6a7.4 7.4 0 0 0 0 2.4l-2 1.6 2 3.4 2.4-1a7.5 7.5 0 0 0 2 1.2l.4 2.6h4l.4-2.6a7.5 7.5 0 0 0 2-1.2l2.4 1 2-3.4-2-1.6c.1-.4.1-.8.1-1.2Z" },
@@ -29,7 +30,7 @@ export function AppShell({ children }: { children: ReactNode }) {
     <div className="flex min-h-dvh flex-col bg-bg">
       <header className="sticky top-0 z-30 border-b border-line/70 bg-void/80 backdrop-blur-md">
         <div className="mx-auto flex h-14 w-full max-w-6xl items-center gap-2 px-3 sm:px-6">
-          <Link href="/assistant" className="mr-auto flex items-center gap-2.5 rounded-control pr-2" aria-label={`${user.assistantName} home`}>
+          <Link href="/today" className="mr-auto flex items-center gap-2.5 rounded-control pr-2" aria-label={`${user.assistantName} home`}>
             <span aria-hidden="true" className="relative grid size-7 place-items-center">
               <span className="absolute inset-0 rounded-full bg-accent/40 blur-[6px]" />
               <span className="relative size-6 rounded-full bg-gradient-to-br from-[#e0fffa] via-accent to-indigo-600" />
@@ -52,7 +53,7 @@ export function AppShell({ children }: { children: ReactNode }) {
                   <svg aria-hidden="true" viewBox="0 0 24 24" className="size-4.5 shrink-0" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
                     <path d={item.icon} />
                   </svg>
-                  <span className="max-[420px]:sr-only">{item.label}</span>
+                  <span className="max-[520px]:sr-only">{item.label}</span>
                 </Link>
               );
             })}

@@ -2,6 +2,9 @@
 
 import { CATEGORIES, type BudgetStatus, type Category, type Expense, type SpendingSummary } from "@nova/shared";
 import { useCallback, useEffect, useRef, useState, type FormEvent } from "react";
+import { WeeklyReportCard } from "@/components/dashboard/WeeklyReportCard";
+import { AddExpenseForm, type ExpenseDraft } from "@/components/expenses/AddExpenseForm";
+import { ReceiptDropzone } from "@/components/expenses/ReceiptScanner";
 import { useAuth } from "@/components/AuthProvider";
 import { CategoryDonut, DailyBars } from "@/components/dashboard/Charts";
 import { Button, Card, Notice, SelectField, Spinner, TextField } from "@/components/ui";
@@ -19,6 +22,7 @@ export default function DashboardPage() {
   const [data, setData] = useState<Data | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
+  const [draft, setDraft] = useState<ExpenseDraft | null>(null);
   const reqId = useRef(0);
   const isCurrentMonth = month === monthKey();
 
@@ -121,6 +125,8 @@ export default function DashboardPage() {
             <Stat label="Top category" value={topCategory(data.summary) ?? "—"} className="max-lg:hidden" />
           </div>
 
+          <WeeklyReportCard currency={currency} className="lg:col-span-3" />
+
           <Card title="Spend by category" className="lg:col-span-1">
             <CategoryDonut summary={data.summary} currency={currency} />
           </Card>
@@ -129,7 +135,13 @@ export default function DashboardPage() {
           </Card>
 
           <Card title="Add expense" className="lg:col-span-1">
-            <AddExpenseForm defaultDate={isCurrentMonth ? dayKey() : `${month}-01`} />
+            <ReceiptDropzone onResult={setDraft} className="mb-4" />
+            <AddExpenseForm
+              defaultDate={isCurrentMonth ? dayKey() : `${month}-01`}
+              draft={draft}
+              onSaved={() => setDraft(null)}
+              onCancelDraft={() => setDraft(null)}
+            />
           </Card>
 
           <Card
@@ -171,77 +183,6 @@ function Chevron({ dir }: { dir: "left" | "right" }) {
   );
 }
 
-function AddExpenseForm({ defaultDate }: { defaultDate: string }) {
-  const empty = { amount: "", category: "Food" as Category, merchant: "", date: defaultDate, note: "" };
-  const [form, setForm] = useState(empty);
-  const [errors, setErrors] = useState<Record<string, string>>({});
-  const [formError, setFormError] = useState<string | null>(null);
-  const [busy, setBusy] = useState(false);
-  const [done, setDone] = useState(false);
-
-  useEffect(() => setForm((f) => ({ ...f, date: defaultDate })), [defaultDate]);
-
-  async function submit(e: FormEvent) {
-    e.preventDefault();
-    setFormError(null);
-    setDone(false);
-    const amount = Number(form.amount);
-    const errs: Record<string, string> = {};
-    if (!form.amount || !Number.isFinite(amount) || amount <= 0) errs.amount = "Enter an amount greater than 0.";
-    if (!form.date) errs.date = "Pick a date.";
-    setErrors(errs);
-    if (Object.keys(errs).length) return;
-    setBusy(true);
-    try {
-      await api.expenses.create({
-        amount: Math.round(amount * 100) / 100,
-        category: form.category,
-        merchant: form.merchant.trim() || undefined,
-        note: form.note.trim() || undefined,
-        // Noon local time so the expense lands on the chosen day in any timezone.
-        date: new Date(`${form.date}T12:00:00`).toISOString(),
-        source: "manual",
-      });
-      setForm({ ...empty, category: form.category, date: form.date });
-      setDone(true);
-      notifyDataChanged(); // dashboard listens and refetches
-    } catch (err) {
-      const fe = fieldErrors(err);
-      setErrors(fe);
-      if (!Object.keys(fe).length) setFormError(errorMessage(err));
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  return (
-    <form onSubmit={submit} noValidate className="grid grid-cols-2 gap-3">
-      {formError && <Notice tone="danger" className="col-span-2">{formError}</Notice>}
-      <TextField label="Amount (₹)" type="number" inputMode="decimal" min="0" step="0.01" placeholder="250" value={form.amount} onChange={(e) => setForm({ ...form, amount: e.target.value })} error={errors.amount} />
-      <SelectField label="Category" value={form.category} onChange={(e) => setForm({ ...form, category: e.target.value as Category })} error={errors.category}>
-        {CATEGORIES.map((c) => (
-          <option key={c} value={c}>
-            {c}
-          </option>
-        ))}
-      </SelectField>
-      <TextField label="Merchant" placeholder="Swiggy" maxLength={100} value={form.merchant} onChange={(e) => setForm({ ...form, merchant: e.target.value })} error={errors.merchant} />
-      <TextField label="Date" type="date" max={dayKey()} value={form.date} onChange={(e) => setForm({ ...form, date: e.target.value })} error={errors.date} />
-      <TextField label="Note" placeholder="Optional" maxLength={500} value={form.note} onChange={(e) => setForm({ ...form, note: e.target.value })} error={errors.note} className="col-span-2" />
-      <div className="col-span-2 flex items-center gap-3">
-        <Button type="submit" loading={busy} className="flex-1">
-          Add expense
-        </Button>
-        {done && (
-          <span role="status" className="text-sm text-ok">
-            Added ✓
-          </span>
-        )}
-      </div>
-    </form>
-  );
-}
-
 function ExpenseList({ expenses, currency, onDelete }: { expenses: Expense[]; currency: string; onDelete: (id: string) => void }) {
   const [confirming, setConfirming] = useState<string | null>(null);
   if (!expenses.length) return <p className="py-8 text-center text-sm text-faint">No expenses this month. Add one, or just tell your assistant.</p>;
@@ -257,6 +198,7 @@ function ExpenseList({ expenses, currency, onDelete }: { expenses: Expense[]; cu
             <div className="truncate text-xs text-faint">
               {shortDate(e.date)} · {e.category}
               {e.source === "voice" && " · 🎙 voice"}
+              {e.source === "receipt" && " · 🧾 receipt"}
               {e.note && ` · ${e.note}`}
             </div>
           </div>

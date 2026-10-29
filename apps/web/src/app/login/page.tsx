@@ -30,7 +30,7 @@ export default function LoginPage() {
     setBusy(true);
     try {
       await login(parsed.data);
-      router.replace("/assistant");
+      router.replace("/today");
     } catch (err) {
       const fe = fieldErrors(err);
       setErrors(fe);

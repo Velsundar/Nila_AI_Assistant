@@ -3,7 +3,7 @@ import { Schema, model, type HydratedDocument, type Types } from "mongoose";
 export const MAX_STORED_MESSAGES = 20;
 
 export type StoredMessage = { role: "user" | "assistant"; content: string; at: Date };
-export type PendingAction = { tool: string; args: Record<string, unknown>; summary: string };
+export type PendingAction = { tool: string; args: Record<string, unknown>; summary: string; createdAt?: Date };
 
 export interface ConversationShape {
   userId: Types.ObjectId;
@@ -28,7 +28,7 @@ const conversationSchema = new Schema<ConversationShape>(
     messages: { type: [messageSchema], default: [] },
     pendingAction: {
       type: new Schema<PendingAction>(
-        { tool: String, args: Schema.Types.Mixed, summary: String },
+        { tool: String, args: Schema.Types.Mixed, summary: String, createdAt: Date },
         { _id: false },
       ),
       default: null,
@@ -36,6 +36,10 @@ const conversationSchema = new Schema<ConversationShape>(
   },
   { timestamps: true },
 );
+
+/** Idle conversations (and any stale pending action) are dropped after 30 days. */
+export const CONVERSATION_TTL_SECONDS = 30 * 86_400;
+conversationSchema.index({ updatedAt: 1 }, { expireAfterSeconds: CONVERSATION_TTL_SECONDS });
 
 conversationSchema.pre("save", function (next) {
   if (this.messages.length > MAX_STORED_MESSAGES) {

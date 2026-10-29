@@ -16,7 +16,9 @@
         "NSSpeechRecognitionUsageDescription": "Nova uses on-device speech recognition to turn what you say into text.",
         "NSAppTransportSecurity": {
           "NSAllowsLocalNetworking": true
-        }
+        },
+        "NSCameraUsageDescription": "Nova uses the camera to scan receipts so it can prefill an expense for you to confirm.",
+        "NSPhotoLibraryUsageDescription": "Nova reads a receipt photo you pick so it can prefill an expense for you to confirm."
       }
     },
     "android": {
@@ -28,7 +30,8 @@
         "monochromeImage": "./assets/android-icon-monochrome.png"
       },
       "permissions": [
-        "android.permission.RECORD_AUDIO"
+        "android.permission.RECORD_AUDIO",
+        "android.permission.CAMERA"
       ],
       "predictiveBackGestureEnabled": false
     },
@@ -49,11 +52,24 @@
         }
       ],
       [
-        "expo-build-properties",
+        "expo-audio",
         {
-          "android": {
-            "usesCleartextTraffic": true
-          }
+          "microphonePermission": "Nova listens to your voice so you can log expenses and ask questions hands-free.",
+          "recordAudioAndroid": true
+        }
+      ],
+      [
+        "expo-image-picker",
+        {
+          "photosPermission": "Nova reads a receipt photo you pick so it can prefill an expense for you to confirm.",
+          "cameraPermission": "Nova uses the camera to scan receipts so it can prefill an expense for you to confirm.",
+          "microphonePermission": false
+        }
+      ],
+      [
+        "expo-notifications",
+        {
+          "color": "#38BDF8"
         }
       ]
     ],

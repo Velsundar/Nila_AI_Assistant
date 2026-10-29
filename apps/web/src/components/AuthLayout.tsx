@@ -9,7 +9,7 @@ export function AuthLayout({ title, subtitle, children, footer }: { title: strin
   const { status } = useAuth();
   const router = useRouter();
   useEffect(() => {
-    if (status === "authed") router.replace("/assistant");
+    if (status === "authed") router.replace("/today");
   }, [status, router]);
 
   return (

@@ -10,11 +10,20 @@ export type VoicePrefs = {
   speak: boolean;
   /** BCP-47 language for speech recognition. */
   lang: string;
+  /** Listen for "Hey <assistantName>" in the background while the assistant page is open (Chrome/Edge). */
+  wakeWord: boolean;
+  /** Speak the daily briefing the first time the assistant opens each day. */
+  autoBriefing: boolean;
 };
 
 const KEY = "nova.voicePrefs";
-export const DEFAULT_PREFS: VoicePrefs = { voiceURI: "", rate: 1, speak: true, lang: "en-IN" };
+export const DEFAULT_PREFS: VoicePrefs = { voiceURI: "", rate: 1, speak: true, lang: "en-IN", wakeWord: false, autoBriefing: false };
 const EVENT = "nova:prefs";
+
+/** Current prefs straight from localStorage (client only). */
+export function readVoicePrefs(): VoicePrefs {
+  return read();
+}
 
 function read(): VoicePrefs {
   try {

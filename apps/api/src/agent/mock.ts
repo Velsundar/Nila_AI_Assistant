@@ -216,6 +216,129 @@ export function parseReminder(raw: string, ctx: LlmContext): { text: string; dat
   return { text: text || "your reminder", dateTime: `${date}T${pad(hour ?? 9)}:${pad(minute)}` };
 }
 
+// ---------- personal-assistant phrases (tasks, notes, weather, briefings) ----------
+
+const splitItems = (s: string) =>
+  s
+    .split(/\s*,\s*(?:and\s+)?|\s+and\s+|\s*&\s*/)
+    .map((x) => x.replace(/^(some|a|an|the)\s+/, "").trim())
+    .filter(Boolean);
+
+function listName(raw: string): string {
+  const s = raw.replace(/^(my|the|our)\s+/, "").replace(/\s*list$/, "").trim();
+  if (!s || /^(to ?-?do'?s?|tasks?)$/.test(s)) return "Inbox";
+  return titleCase(s);
+}
+
+/** Pull "today"/"tomorrow"/"on friday" out of a task title. */
+function taskDue(text: string, ctx: LlmContext): { rest: string; dueDate?: string } {
+  const td = today(ctx);
+  let rest = text;
+  let dueDate: string | undefined;
+  const take = (re: RegExp, f: (m: RegExpExecArray) => string) => {
+    const m = re.exec(rest);
+    if (m) {
+      dueDate = f(m);
+      rest = (rest.slice(0, m.index) + rest.slice(m.index + m[0].length)).replace(/\s+/g, " ").trim();
+    }
+  };
+  take(/\b(?:by |for |due )?tomorrow\b/, () => addDays(td, 1));
+  if (!dueDate) take(/\b(?:by |for |due )?(?:today|tonight)\b/, () => td);
+  if (!dueDate) {
+    take(new RegExp(`\\b(?:by |on |due |this |next )?(${WEEKDAYS.join("|")})\\b`), (m) => {
+      let diff = (WEEKDAYS.indexOf(m[1]) - zonedParts(ctx.now, ctx.timezone).weekday + 7) % 7;
+      if (diff === 0) diff = 7;
+      return addDays(td, diff);
+    });
+  }
+  return { rest, dueDate };
+}
+
+function planAssistant(t: string, ctx: LlmContext, original: string): Plan | undefined {
+  // weather
+  if (/\b(weather|temperature|forecast|raining|rain|umbrella|humid|sunny|how hot|how cold)\b/.test(t) && !/\b(spent|paid)\b/.test(t)) {
+    const city = /\bin ([a-z][a-z .-]*?)(?:\s+(?:today|tomorrow|tonight|right now|now|this week))?$/.exec(t)?.[1];
+    return { tool: "getWeather", args: { ...(city ? { city: titleCase(city) } : {}), ...(/\btomorrow\b/.test(t) ? { day: "tomorrow" } : {}) } };
+  }
+  // briefings
+  if (/\b(weekly (report|summary|recap|review)|week'?s? (report|recap|review)|how did i do last week|last week'?s? (report|summary|recap))\b/.test(t)) {
+    return { tool: "getWeeklyReport", args: {} };
+  }
+  if (/\b(brief me|briefing|my day look|what'?s (on )?(for )?today|plan for today|morning update|daily (summary|update))\b/.test(t)) {
+    return { tool: "getDailyBriefing", args: {} };
+  }
+
+  // notes
+  // Match on the original text so the note keeps the user's casing ("B2-47").
+  const raw = original.replace(/[’]/g, "'").replace(/\s+/g, " ").trim().replace(/[.!]+$/, "");
+  const saveNote =
+    /^(?:please )?(?:take|make|save|add|write|create)(?: a| this)? note(?: that| saying| to say| of|:|,)?\s+(.+)$/i.exec(raw) ??
+    /^(?:note|jot down)(?: that|:|,)?\s+(.+)$/i.exec(raw);
+  if (saveNote) return { tool: "manageNote", args: { action: "save", text: saveNote[1] } };
+  if (/\bnotes?\b/.test(t)) {
+    if (/\b(delete|remove|erase)\b/.test(t)) return { tool: "manageNote", args: { action: "delete", query: t } };
+    if (/\b(what|find|search|show|read|look up|where|which|tell)\b/.test(t)) return { tool: "manageNote", args: { action: "search", query: t } };
+  }
+
+  // tasks: add
+  const addToList = /^(?:please )?(?:add|put)\s+(.+?)\s+(?:to|on|in)\s+(?:my |the )?([a-z -]*?)\s*list$/.exec(t);
+  if (addToList) {
+    const { rest, dueDate } = taskDue(addToList[1], ctx);
+    return { tool: "manageTask", args: { action: "add", titles: splitItems(rest), list: listName(addToList[2]), ...(dueDate ? { dueDate } : {}) } };
+  }
+  const addTask = /^(?:please )?(?:add|create|new)\s+(?:a\s+)?(?:task|to-?do)\s*(?:to\s+|:\s*|,\s*)?(.+)$/.exec(t);
+  if (addTask) {
+    const { rest, dueDate } = taskDue(addTask[1], ctx);
+    return { tool: "manageTask", args: { action: "add", titles: [rest], ...(dueDate ? { dueDate } : {}) } };
+  }
+  // tasks: delete
+  const delFromList = /\b(?:delete|remove|take)\s+(.+?)\s+(?:from|off)\s+(?:my |the )?([a-z -]*?)\s*list$/.exec(t);
+  if (delFromList) return { tool: "manageTask", args: { action: "delete", titles: splitItems(delFromList[1]), list: listName(delFromList[2]) } };
+  const delTask = /\b(?:delete|remove)\s+(?:the\s+)?(?:task|to-?do)\s+(.+)$/.exec(t);
+  if (delTask) return { tool: "manageTask", args: { action: "delete", titles: [delTask[1]] } };
+  // tasks: complete
+  const done =
+    /^(?:please )?(?:mark|tick(?: off)?|check off|cross off)\s+(.+?)(?:\s+as)?(?:\s+(?:done|complete|completed|finished))?(?:\s+off)?$/.exec(t) ??
+    /^(?:complete|finish)\s+(?:the\s+)?(?:task\s+)?(.+)$/.exec(t) ??
+    /^(?:i(?: have|'ve)?\s+)?(?:done with|finished|completed)\s+(.+)$/.exec(t) ??
+    /^(.+?)\s+is\s+(?:done|finished|complete)$/.exec(t);
+  if (done && !parseAmount(t)) {
+    const fromList = /\s+(?:from|on|in)\s+(?:my |the )?([a-z -]*?)\s*list$/.exec(done[1]);
+    const items = fromList ? done[1].slice(0, fromList.index) : done[1];
+    return {
+      tool: "manageTask",
+      args: { action: "complete", titles: splitItems(items.replace(/^(?:the\s+)?task\s+/, "")), ...(fromList ? { list: listName(fromList[1]) } : {}) },
+    };
+  }
+  // tasks: list
+  const namedList = /\b(?:my|the) ([a-z -]+?) list\b/.exec(t);
+  if (namedList && /\b(what|show|read|list|anything|what's|whats|tell|check)\b/.test(t)) {
+    const name = listName(namedList[1]);
+    return { tool: "manageTask", args: { action: "list", ...(name === "Inbox" && !/to ?-?do/.test(namedList[1]) ? {} : { list: name }) } };
+  }
+  if (/\b(tasks?|to-?dos?|to do list)\b/.test(t)) {
+    if (/\boverdue\b/.test(t)) return { tool: "manageTask", args: { action: "list", when: "overdue" } };
+    if (/\b(today|due)\b/.test(t)) return { tool: "manageTask", args: { action: "list", when: "today" } };
+    return { tool: "manageTask", args: { action: "list" } };
+  }
+  if (/\bwhat'?s overdue\b/.test(t)) return { tool: "manageTask", args: { action: "list", when: "overdue" } };
+  return undefined;
+}
+
+/** Canned answers for a few everyday questions (the real LLM answers these from its own knowledge). */
+function generalAnswer(t: string): string | undefined {
+  if (/\bgrams?\b.*\bcup\b|\bcup\b.*\bgrams?\b/.test(t)) {
+    return "One cup is about 240 millilitres. That's roughly 120 grams of flour, 200 grams of sugar, or 240 grams of water.";
+  }
+  if (/\b(workout|exercise routine|exercises)\b/.test(t)) {
+    return "Try this 10 minute workout: one minute each of jumping jacks, squats, push-ups, lunges and plank, then repeat the round once.";
+  }
+  if (/\bplan my (evening|night)\b/.test(t)) {
+    return "How about a short walk first, then dinner, an hour for something you enjoy, and lights out by eleven. Want me to add any of that as tasks?";
+  }
+  return undefined;
+}
+
 // ---------- intent → tool calls ----------
 
 type Plan = { tool: string; args: Record<string, unknown> } | { reply: string };
@@ -230,11 +353,11 @@ export function planFor(message: string, ctx: LlmContext): Plan {
   if (/\b(what can you do|help me|how do i use|what do you do)\b/.test(t) || t === "help") {
     return {
       reply:
-        "I can log expenses, tell you what you've spent, manage budgets, set reminders and remember things about you. Try saying, spent 250 on lunch at Swiggy.",
+        "I can log expenses and budgets, keep your to-do lists and notes, set reminders, check the weather and brief you on your day. Try saying, add milk and eggs to my shopping list.",
     };
   }
   if (/\bwhat('s| is) my name\b|\bwho am i\b/.test(t)) return { reply: `You're ${ctx.userName}.` };
-  if (/\bwhat('s| is) your name\b|\bwho are you\b/.test(t)) return { reply: `I'm ${ctx.assistantName}, your money assistant.` };
+  if (/\bwhat('s| is) your name\b|\bwho are you\b/.test(t)) return { reply: `I'm ${ctx.assistantName}, your personal assistant.` };
   if (/\bwhat do you (know|remember) about me\b/.test(t)) {
     return {
       reply: ctx.memories.length
@@ -247,9 +370,15 @@ export function planFor(message: string, ctx: LlmContext): Plan {
   if (/\bremind me\b/.test(t)) return { tool: "createReminder", args: parseReminder(message, ctx) };
   if (/\breminders?\b/.test(t) && /\b(what|show|list|any|my|upcoming|pending)\b/.test(t)) return { tool: "listReminders", args: {} };
 
+  const assistant = planAssistant(t, ctx, message);
+  if (assistant) return assistant;
+
   // memory
+  const forget = /^(?:please )?forget (?:that |about )?(.+)$/.exec(t);
+  if (forget && !/^(it|that|this)$/.test(forget[1])) return { tool: "manageMemory", args: { action: "forget", query: forget[1] } };
+  if (/\b(list|show|what are) (my |the )?(memories|facts)\b/.test(t)) return { tool: "manageMemory", args: { action: "list" } };
   const rem = /\bremember (?:that )?(.+)/.exec(t);
-  if (rem) return { tool: "rememberFact", args: { fact: rem[1] } };
+  if (rem) return { tool: "manageMemory", args: { action: "save", fact: rem[1] } };
 
   // budgets
   if (/\bbudgets?\b/.test(t)) {
@@ -322,6 +451,15 @@ export function planFor(message: string, ctx: LlmContext): Plan {
     };
   }
   if (/\b(spent|paid|bought)\b/.test(t)) return { reply: "How much was it?" };
+
+  const general = generalAnswer(t);
+  if (general) return { reply: general };
+  if (/^(what|how|why|who|when|where|can|could|should|is|are|do|does|give|tell|suggest|recommend|explain)\b/.test(t)) {
+    return {
+      reply:
+        "I can answer general questions once my language model is connected. Right now I can help with expenses, tasks, notes, reminders and the weather.",
+    };
+  }
 
   return {
     reply: "Sorry, I didn't catch that. You can say things like, spent 250 on lunch at Swiggy, or how much did I spend this month.",
@@ -407,8 +545,59 @@ export function composeReply(name: string, result: Json, ctx: LlmContext, userTe
       const items = list.slice(0, 5).map((r) => `${r.text} ${speakDay(r.dateTime, ctx.timezone, ctx.now)}`);
       return `You have ${list.length} reminder${list.length === 1 ? "" : "s"}: ${joinList(items)}.`;
     }
-    case "rememberFact":
-      return "Got it, I'll remember that.";
+    case "manageMemory": {
+      if (result.saved) return "Got it, I'll remember that.";
+      if (result.forgotten) return `Okay, I've forgotten that ${result.forgotten}.`;
+      const facts = (result.facts ?? []) as string[];
+      return facts.length ? `Here's what I remember: ${facts.slice(0, 5).join(". ")}.` : "I don't have any saved facts about you yet.";
+    }
+    case "manageTask": {
+      if (result.added) {
+        const due = result.due ? ` for ${speakDay(zonedToUtc(...(result.due.split("-").map(Number) as [number, number, number]), 12, 0, 0, ctx.timezone), ctx.timezone, ctx.now).replace(/^on /, "")}` : "";
+        return result.list === "Inbox"
+          ? `Added ${joinList(result.added)} to your tasks${due}.`
+          : `Added ${joinList(result.added)} to your ${result.list} list${due}.`;
+      }
+      if (result.completed) {
+        let s = `Nice, I've marked ${joinList(result.completed)} as done.`;
+        if (result.notFound?.length) s += ` I couldn't find ${joinList(result.notFound)}.`;
+        return s;
+      }
+      if (result.deleted) return `Deleted ${joinList(result.deleted)}.`;
+      if (result.tasks) {
+        const items = (result.tasks as Json[]).slice(0, 6).map((x) => x.title as string);
+        const more = result.count > items.length ? ` and ${result.count - items.length} more` : "";
+        const where = result.list ? (result.list === "Inbox" ? "Your task list" : `Your ${result.list} list`) : null;
+        if (!result.count) {
+          if (result.when === "today") return "Nothing is due today.";
+          if (result.when === "overdue") return "Nothing is overdue.";
+          return where ? `${where} is empty.` : "You have no open tasks.";
+        }
+        const n = `${result.count} ${result.count === 1 ? "item" : "items"}`;
+        if (result.when === "today") return `You have ${result.count} ${result.count === 1 ? "task" : "tasks"} due: ${joinList(items)}${more}.`;
+        if (result.when === "overdue") return `${result.count} ${result.count === 1 ? "task is" : "tasks are"} overdue: ${joinList(items)}${more}.`;
+        return `${where ?? "You have"} ${where ? "has " : ""}${n}${where ? "" : " open"}: ${more ? items.join(", ") + more : joinList(items)}.`;
+      }
+      return "Done.";
+    }
+    case "manageNote": {
+      if (result.saved) return "Saved your note.";
+      if (result.deleted) return "Deleted that note.";
+      const list = (result.notes ?? []) as Json[];
+      if (!list.length) return "I couldn't find a note about that.";
+      return `Your note says: ${list[0].text}`;
+    }
+    case "getWeather": {
+      if (result.day === "tomorrow") {
+        return `Tomorrow in ${result.city}: ${String(result.condition).toLowerCase()}, ${result.lowC} to ${result.highC} degrees, with a ${result.rainChance}% chance of rain.`;
+      }
+      const rain = result.today.rainChance >= 30 ? ` and a ${result.today.rainChance}% chance of rain` : "";
+      return `In ${result.city} it's ${result.now.tempC} degrees and ${String(result.now.condition).toLowerCase()}, with a high of ${result.today.highC}${rain}.`;
+    }
+    case "getDailyBriefing":
+      return String(result.briefing);
+    case "getWeeklyReport":
+      return String(result.report);
     case "updateExpense":
       return "Done, I've updated it.";
     case "deleteExpense":

@@ -52,3 +52,39 @@ export function prettifyTool(tool: string): string {
   const s = tool.replace(/([a-z])([A-Z])/g, "$1 $2").replace(/[_-]+/g, " ").trim().toLowerCase();
   return s.charAt(0).toUpperCase() + s.slice(1);
 }
+
+/** Local calendar date as "YYYY-MM-DD" (the strict date form the API accepts). */
+export function localISODate(d = new Date()): string {
+  const p = (n: number) => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
+}
+
+/** Parses "YYYY-MM-DD" as a *local* date (Date.parse would treat it as UTC midnight). */
+export function parseLocalDate(s: string): Date {
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(s.slice(0, 10));
+  if (m && s.length <= 10) return new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3]));
+  return new Date(s);
+}
+
+export function addDays(d: Date, n: number): Date {
+  const x = new Date(d);
+  x.setDate(x.getDate() + n);
+  return x;
+}
+
+/** Due-date label for a task: "Overdue · 28 Oct", "Today", "Tomorrow", "Mon 3 Nov". */
+export function dueLabel(due: string | undefined): { text: string; tone: "overdue" | "today" | "future" } | null {
+  if (!due) return null;
+  const d = parseLocalDate(due);
+  if (Number.isNaN(d.getTime())) return null;
+  const today = localISODate();
+  const day = localISODate(d);
+  if (day < today) return { text: `Overdue · ${d.toLocaleDateString("en-IN", { day: "numeric", month: "short" })}`, tone: "overdue" };
+  if (day === today) return { text: "Today", tone: "today" };
+  if (day === localISODate(addDays(new Date(), 1))) return { text: "Tomorrow", tone: "future" };
+  return { text: d.toLocaleDateString("en-IN", { weekday: "short", day: "numeric", month: "short" }), tone: "future" };
+}
+
+export function formatPercent(n: number): string {
+  return `${n > 0 ? "+" : ""}${Math.round(n)}%`;
+}

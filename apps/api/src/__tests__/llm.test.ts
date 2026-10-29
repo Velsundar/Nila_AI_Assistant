@@ -27,7 +27,7 @@ describe("OpenAI-compatible provider", () => {
       }),
     );
     const llm = createOpenAiCompatLlm({ provider: "groq", apiKey: "k", fetchImpl: fetchImpl as unknown as typeof fetch });
-    expect(llm.model).toBe("llama-3.3-70b-versatile");
+    expect(llm.model).toBe("openai/gpt-oss-120b");
     const req: ChatRequest = {
       messages: [
         { role: "system", content: "sys" },
@@ -45,7 +45,7 @@ describe("OpenAI-compatible provider", () => {
     expect(url).toBe("https://api.groq.com/openai/v1/chat/completions");
     expect((init.headers as Record<string, string>).Authorization).toBe("Bearer k");
     const body = JSON.parse(init.body as string);
-    expect(body.model).toBe("llama-3.3-70b-versatile");
+    expect(body.model).toBe("openai/gpt-oss-120b");
     expect(body.tool_choice).toBe("auto");
     expect(body.tools[0]).toMatchObject({ type: "function", function: { name: "addExpense", parameters: { type: "object" } } });
     expect(body.tools[0].function.parameters.properties.category.enum).toContain("Food");
@@ -125,7 +125,7 @@ describe("OpenAI-compatible provider", () => {
     expect(res.actions).toHaveLength(1);
     expect(res.actions[0]).toMatchObject({ tool: "addExpense", ok: true, args: { amount: 250, category: "Food" } });
     expect(res.reply).toBe("Added ₹250 for food"); // markdown + emoji stripped for TTS
-    expect(seen[0].messages[0].content).toMatch(/Never do arithmetic yourself/);
+    expect(seen[0].messages[0].content).toMatch(/Never do arithmetic/);
   });
 
   it("caps the tool loop at 5 iterations", async () => {

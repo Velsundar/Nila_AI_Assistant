@@ -37,6 +37,7 @@ export function useSpeechSynthesis() {
   // Keep references to queued utterances: Chrome can GC them and never fire onend.
   const queueRef = useRef<SpeechSynthesisUtterance[]>([]);
   const sessionRef = useRef(0);
+  const safetyTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(() => {
     if (typeof window === "undefined" || !("speechSynthesis" in window)) {
@@ -50,6 +51,8 @@ export function useSpeechSynthesis() {
     synth.addEventListener?.("voiceschanged", load);
     return () => {
       synth.removeEventListener?.("voiceschanged", load);
+      if (safetyTimer.current) clearTimeout(safetyTimer.current);
+      sessionRef.current++;
       synth.cancel();
     };
   }, []);
@@ -58,6 +61,7 @@ export function useSpeechSynthesis() {
     if (typeof window === "undefined" || !("speechSynthesis" in window)) return;
     sessionRef.current++;
     queueRef.current = [];
+    if (safetyTimer.current) clearTimeout(safetyTimer.current);
     window.speechSynthesis.cancel();
     setSpeaking(false);
   }, []);
@@ -109,7 +113,8 @@ export function useSpeechSynthesis() {
       if (synth.paused) synth.resume();
       // Safety net in case onend never fires (known Chrome/Safari bugs).
       const budget = 4000 + parts.join(" ").length * 90;
-      setTimeout(() => {
+      if (safetyTimer.current) clearTimeout(safetyTimer.current);
+      safetyTimer.current = setTimeout(() => {
         if (!synth.speaking) finish();
       }, budget);
     },

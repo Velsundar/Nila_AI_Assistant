@@ -9,6 +9,7 @@ nodeLinker: hoisted
 allowBuilds:
   esbuild: true
   sharp: true
+  tesseract.js: false
   unrs-resolver: true
 
 minimumReleaseAgeExclude:

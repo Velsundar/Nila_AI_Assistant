@@ -1,22 +1,30 @@
 "use client";
 
-import type { AgentAction } from "@nova/shared";
+import { ApiError, type AgentAction, type Expense } from "@nova/shared";
 import Link from "next/link";
-import { useCallback, useEffect, useRef, useState, type FormEvent } from "react";
-import { describeAction } from "@/components/assistant/actions";
+import { useCallback, useEffect, useId, useRef, useState, type FormEvent } from "react";
+import { ACTION_ICON, actionKind, describeAction } from "@/components/assistant/actions";
 import { Orb, type OrbState } from "@/components/assistant/Orb";
 import { useAuth } from "@/components/AuthProvider";
+import { AddExpenseForm } from "@/components/expenses/AddExpenseForm";
+import { FileButton, useReceiptScan, type ScanOutcome } from "@/components/expenses/ReceiptScanner";
+import { useAudioRecorder } from "@/hooks/useAudioRecorder";
 import { useMicLevel } from "@/hooks/useMicLevel";
 import { useSpeechRecognition, type RecognitionError } from "@/hooks/useSpeechRecognition";
 import { useSpeechSynthesis } from "@/hooks/useSpeechSynthesis";
+import { useWakeWord } from "@/hooks/useWakeWord";
 import { api, errorMessage } from "@/lib/api";
 import { cn } from "@/lib/cn";
 import { notifyDataChanged } from "@/lib/events";
-import { useVoicePrefs } from "@/lib/prefs";
+import { dayKey, formatMoney, timezone } from "@/lib/format";
+import { blobToDataUrl } from "@/lib/image";
+import { readVoicePrefs, useVoicePrefs } from "@/lib/prefs";
 
-type Msg = { id: number; role: "user" | "assistant" | "error"; text: string; actions?: AgentAction[] };
+type Msg = { id: number; role: "user" | "assistant" | "error" | "notice"; text: string; actions?: AgentAction[]; tag?: string };
 
 const CONV_KEY = "nova.conversationId";
+/** Local date (YYYY-MM-DD) of the last automatic briefing, so it plays once per day. */
+const AUTO_BRIEF_KEY = "nova.lastAutoBriefing";
 const HOLD_MS = 350;
 
 const STATUS: Record<OrbState, string> = {
@@ -26,7 +34,15 @@ const STATUS: Record<OrbState, string> = {
   speaking: "Speaking",
 };
 
-const SUGGESTIONS = ["I spent 250 on lunch at Swiggy", "How much did I spend this month?", "Set a food budget of 5000", "Remind me to pay rent tomorrow at 9am"];
+const SUGGESTIONS = [
+  "Add milk to my shopping list",
+  "What's the weather?",
+  "Note that the gate code is 4521",
+  "Plan my evening",
+  "I spent 250 on lunch at Swiggy",
+  "How did my spending go last week?",
+  "Remind me to call mom at 7pm",
+];
 
 const RECOGNITION_ERRORS: Record<RecognitionError, string> = {
   "not-allowed": "Microphone access was blocked. Allow the mic for this site in your browser's address bar, or type below.",
@@ -47,6 +63,10 @@ export default function AssistantPage() {
   const [thinking, setThinking] = useState(false);
   const [pending, setPending] = useState<string | null>(null);
   const [text, setText] = useState("");
+  const [transcribing, setTranscribing] = useState(false);
+  const [sttDown, setSttDown] = useState(false);
+  const [scan, setScan] = useState<ScanOutcome | null>(null);
+  const inputRef = useRef<HTMLInputElement>(null);
   const nextId = useRef(1);
   const convRef = useRef<string | undefined>(undefined);
   const busyRef = useRef(false);
@@ -82,7 +102,7 @@ export default function AssistantPage() {
         const res = await api.agent.send({
           message,
           conversationId: convRef.current,
-          timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
+          timezone: timezone(),
         });
         convRef.current = res.conversationId;
         try {
@@ -105,12 +125,110 @@ export default function AssistantPage() {
     [push, tts],
   );
 
+  /** "Brief me": GET /briefing and speak its text, no agent/LLM involved. */
+  const briefMe = useCallback(
+    async (opts: { auto?: boolean } = {}) => {
+      if (busyRef.current) return;
+      busyRef.current = true;
+      tts.cancel();
+      if (!opts.auto) push({ role: "user", text: "Brief me" });
+      setThinking(true);
+      try {
+        const b = await api.briefing.today({ tz: timezone() });
+        push({ role: "assistant", text: b.text, tag: opts.auto ? "Your morning briefing" : "Daily briefing" });
+        if (opts.auto) {
+          try {
+            window.localStorage.setItem(AUTO_BRIEF_KEY, dayKey());
+          } catch {
+            /* ignore */
+          }
+        }
+        const p = prefsRef.current;
+        if (p.speak && b.text) tts.speak(b.text, { voiceURI: p.voiceURI, rate: p.rate, lang: p.lang });
+      } catch (err) {
+        push({ role: "error", text: errorMessage(err) });
+      } finally {
+        busyRef.current = false;
+        setThinking(false);
+      }
+    },
+    [push, tts],
+  );
+
+  // Optional auto-briefing on the first open of the day (Settings, off by default).
+  const autoBriefed = useRef(false);
+  useEffect(() => {
+    if (autoBriefed.current) return;
+    autoBriefed.current = true;
+    if (!readVoicePrefs().autoBriefing) return;
+    let last: string | null = null;
+    try {
+      last = window.localStorage.getItem(AUTO_BRIEF_KEY);
+    } catch {
+      /* ignore */
+    }
+    if (last !== dayKey()) void briefMe({ auto: true });
+  }, [briefMe]);
+
   const rec = useSpeechRecognition({
     lang: prefs.lang,
     onFinal: (t) => void send(t),
     onSpeechStart: () => tts.cancel(), // never talk over the user
   });
-  const mic = useMicLevel(rec.listening);
+
+  // ---- Server STT fallback (no SpeechRecognition): record with MediaRecorder, POST /transcribe.
+  const recorder = useAudioRecorder();
+  const voiceMode: "browser" | "server" | "none" | null =
+    rec.supported === null ? null : rec.supported ? "browser" : recorder.supported && !sttDown ? "server" : recorder.supported === null ? null : "none";
+  const listening = rec.listening || recorder.recording;
+  const mic = useMicLevel(listening);
+
+  const transcribingRef = useRef(false);
+  const handleRecording = useCallback(
+    async (blob: Blob | null) => {
+      if (!blob) return push({ role: "notice", text: "That was too short. Hold the mic while you talk." });
+      if (transcribingRef.current) return;
+      transcribingRef.current = true;
+      setTranscribing(true);
+      try {
+        const audio = await blobToDataUrl(blob);
+        const { text } = await api.voice.transcribe({ audio, language: prefsRef.current.lang.slice(0, 2) });
+        if (text.trim()) void send(text);
+        else push({ role: "notice", text: "I couldn't make out any words. Try again, a little closer to the mic." });
+      } catch (err) {
+        if (err instanceof ApiError && (err.code === "STT_UNAVAILABLE" || (err.status === 503 && err.code !== "STT_RATE_LIMITED"))) {
+          // No server STT at all: switch to typing for the rest of the session.
+          setSttDown(true);
+          push({ role: "notice", text: "Voice transcription isn't available right now, so let's type. Your message box is ready." });
+          requestAnimationFrame(() => inputRef.current?.focus());
+        } else if (err instanceof ApiError && ["STT_RATE_LIMITED", "STT_BAD_AUDIO", "STT_FAILED", "PAYLOAD_TOO_LARGE"].includes(err.code)) {
+          // Transient / per-recording problems: explain, keep the mic available.
+          push({ role: "notice", text: errorMessage(err) });
+        } else push({ role: "error", text: errorMessage(err) });
+      } finally {
+        transcribingRef.current = false;
+        setTranscribing(false);
+      }
+    },
+    [push, send],
+  );
+
+  // ---- Receipt scanning from the assistant (camera / upload). Opens a confirm dialog; never auto-saves.
+  const receipt = useReceiptScan((r) => setScan(r));
+  useEffect(() => {
+    if (receipt.error) {
+      push({ role: "error", text: `Receipt scan failed: ${receipt.error}` });
+      receipt.clearError();
+    }
+  }, [receipt, push]);
+  const onReceiptSaved = (e: Expense) => {
+    setScan(null);
+    push({
+      role: "assistant",
+      text: `Saved ${formatMoney(e.amount, currency)}${e.merchant ? ` at ${e.merchant}` : ""} from your receipt.`,
+      actions: [{ tool: "addExpense", ok: true, args: { amount: e.amount, category: e.category, merchant: e.merchant } }],
+    });
+  };
 
   // `?orb=listening|thinking|speaking` previews a state (used for screenshots / demos).
   const [demo, setDemo] = useState<OrbState | null>(null);
@@ -129,51 +247,79 @@ export default function AssistantPage() {
     return () => cancelAnimationFrame(raf);
   }, [demo, mic.levelRef]);
 
-  const orbState: OrbState = demo ?? (rec.listening ? "listening" : thinking ? "thinking" : tts.speaking ? "speaking" : "idle");
+  const working = thinking || transcribing || receipt.busy;
+  const orbState: OrbState = demo ?? (listening ? "listening" : working ? "thinking" : tts.speaking ? "speaking" : "idle");
 
   // ---- Push-to-talk: hold = talk while held; quick tap = hands-free until silence / tap again.
   const pressRef = useRef<{ at: number; wasListening: boolean } | null>(null);
+  const wakeStopRef = useRef<() => void>(() => undefined);
   const beginTalk = useCallback(() => {
+    if (busyRef.current || transcribingRef.current) return;
     tts.cancel();
+    if (voiceMode === "server") {
+      recorder.clearError();
+      void recorder.start();
+      return;
+    }
+    wakeStopRef.current(); // only one recognizer may own the mic
     rec.clearError();
     rec.start();
-  }, [rec, tts]);
+  }, [rec, tts, recorder, voiceMode]);
+  const endTalk = useCallback(() => {
+    if (recorder.recording || voiceMode === "server") {
+      void recorder.stop().then((b) => (b === undefined ? undefined : handleRecording(b)));
+      return;
+    }
+    rec.stop();
+  }, [rec, recorder, voiceMode, handleRecording]);
 
   const onMicDown = (e: React.PointerEvent) => {
     if (e.button !== 0) return;
     e.preventDefault();
-    const wasListening = rec.listening;
+    const wasListening = listening;
     pressRef.current = { at: performance.now(), wasListening };
-    if (wasListening) rec.stop();
+    if (wasListening) endTalk();
     else beginTalk();
   };
   const onMicUp = () => {
     const p = pressRef.current;
     pressRef.current = null;
     if (!p || p.wasListening) return;
-    if (performance.now() - p.at > HOLD_MS) rec.stop();
+    if (performance.now() - p.at > HOLD_MS) endTalk();
   };
   const onMicClick = (e: React.MouseEvent) => {
     // Keyboard activation (Enter) arrives as a click with detail 0: toggle.
     if (e.detail !== 0) return;
-    if (rec.listening) rec.stop();
+    if (listening) endTalk();
     else beginTalk();
   };
+
+  // ---- Wake word: "Hey <name>" while this page is open + visible, paused while busy or speaking.
+  const wake = useWakeWord({
+    active: prefs.wakeWord && voiceMode === "browser" && !rec.listening && !working && !tts.speaking && !scan,
+    assistantName: name,
+    lang: prefs.lang,
+    onWake: (command) => {
+      if (command) void send(command);
+      else beginTalk();
+    },
+  });
+  wakeStopRef.current = wake.stopNow;
 
   // Space bar = hold to talk (unless typing in a field).
   useEffect(() => {
     const isTyping = (el: EventTarget | null) =>
-      el instanceof HTMLElement && (el.isContentEditable || ["INPUT", "TEXTAREA", "SELECT"].includes(el.tagName));
+      el instanceof HTMLElement && (el.isContentEditable || ["INPUT", "TEXTAREA", "SELECT"].includes(el.tagName) || !!el.closest('[role="dialog"]'));
     const down = (e: KeyboardEvent) => {
       if (e.code !== "Space" || isTyping(e.target) || e.metaKey || e.ctrlKey || e.altKey) return;
       e.preventDefault();
-      if (e.repeat || rec.supported === false) return;
-      if (!rec.listening) beginTalk();
+      if (e.repeat || voiceMode === "none" || voiceMode === null) return;
+      if (!listening) beginTalk();
     };
     const up = (e: KeyboardEvent) => {
       if (e.code !== "Space" || isTyping(e.target)) return;
       e.preventDefault();
-      rec.stop();
+      if (listening || recorder.recording) endTalk();
     };
     window.addEventListener("keydown", down);
     window.addEventListener("keyup", up);
@@ -181,12 +327,12 @@ export default function AssistantPage() {
       window.removeEventListener("keydown", down);
       window.removeEventListener("keyup", up);
     };
-  }, [rec, beginTalk]);
+  }, [listening, beginTalk, endTalk, voiceMode, recorder.recording]);
 
   // Keep the caption log scrolled to the newest line.
   useEffect(() => {
     const el = logRef.current;
-    if (el) el.scrollTo({ top: el.scrollHeight, behavior: "smooth" });
+    if (el && messages.length) el.scrollTo({ top: el.scrollHeight, behavior: "smooth" });
   }, [messages, thinking]);
 
   function onSubmit(e: FormEvent) {
@@ -199,6 +345,7 @@ export default function AssistantPage() {
   function newConversation() {
     tts.cancel();
     rec.abort();
+    recorder.cancel();
     convRef.current = undefined;
     try {
       window.sessionStorage.removeItem(CONV_KEY);
@@ -209,7 +356,28 @@ export default function AssistantPage() {
     setPending(null);
   }
 
-  const voiceError = rec.error ? RECOGNITION_ERRORS[rec.error] : mic.error === "denied" ? RECOGNITION_ERRORS["not-allowed"] : null;
+  const voiceError = rec.error
+    ? RECOGNITION_ERRORS[rec.error]
+    : mic.error === "denied" || recorder.error === "denied"
+      ? RECOGNITION_ERRORS["not-allowed"]
+      : recorder.error === "unavailable"
+        ? RECOGNITION_ERRORS["audio-capture"]
+        : null;
+  const voiceNotice =
+    voiceMode === "none"
+      ? sttDown
+        ? "Voice transcription is unavailable right now. Type your message below."
+        : "Voice input isn't supported in this browser. Type below, or use Chrome, Edge or Safari for voice."
+      : voiceError;
+  const hint =
+    voiceMode === "none" || voiceMode === null
+      ? "Type a message below"
+      : voiceMode === "server"
+        ? "Hold the mic to record, or tap to start and tap again to send"
+        : wake.status === "listening"
+          ? `Say “Hey ${name}”, hold the mic, or press Space`
+          : "Hold the mic or press Space to talk";
+  const camId = useId();
 
   return (
     <main className="relative flex min-h-0 flex-1 flex-col overflow-hidden bg-void text-fg">
@@ -217,7 +385,7 @@ export default function AssistantPage() {
       <div aria-hidden="true" className="pointer-events-none absolute inset-0 bg-[radial-gradient(ellipse_at_50%_35%,rgba(79,70,229,0.18),transparent_60%),radial-gradient(ellipse_at_80%_90%,rgba(45,212,191,0.10),transparent_55%)]" />
       <div aria-hidden="true" className="pointer-events-none absolute inset-0 opacity-50 [background-image:radial-gradient(1px_1px_at_20px_30px,#fff8,transparent),radial-gradient(1px_1px_at_120px_80px,#fff6,transparent),radial-gradient(1.5px_1.5px_at_200px_160px,#a5f3fc88,transparent),radial-gradient(1px_1px_at_60px_190px,#fff5,transparent)] [background-size:240px_220px]" />
 
-      <div className="relative mx-auto grid h-[calc(100dvh-3.5rem)] w-full max-w-6xl grid-rows-[auto_minmax(0,1fr)_auto] gap-3 px-4 pb-4 pt-3 sm:px-6 lg:grid-cols-[minmax(0,1fr)_24rem] lg:grid-rows-[auto_minmax(0,1fr)] lg:gap-x-8">
+      <div className="relative mx-auto grid h-[calc(100dvh-3.5rem)] w-full max-w-6xl grid-cols-[minmax(0,1fr)] grid-rows-[auto_minmax(0,1fr)_auto] gap-3 px-4 pb-4 pt-3 sm:px-6 lg:grid-cols-[minmax(0,1fr)_24rem] lg:grid-rows-[auto_minmax(0,1fr)] lg:gap-x-8">
         {/* Header */}
         <div className="flex items-center gap-3 lg:col-span-2">
           <div className="min-w-0">
@@ -233,10 +401,22 @@ export default function AssistantPage() {
                   orbState === "listening" ? "bg-ok shadow-[0_0_8px_var(--color-ok)]" : orbState === "thinking" ? "bg-violet animate-pulse" : orbState === "speaking" ? "bg-sky-400 animate-pulse" : "bg-accent/70",
                 )}
               />
-              {STATUS[orbState]}
+              {transcribing ? "Transcribing…" : receipt.busy ? "Reading receipt…" : STATUS[orbState]}
             </p>
+            <WakeIndicator enabled={prefs.wakeWord} mode={voiceMode} status={wake.status} name={name} />
           </div>
           <div className="ml-auto flex items-center gap-1">
+            <button
+              type="button"
+              onClick={() => void briefMe()}
+              disabled={working}
+              className="mr-1 inline-flex h-9 shrink-0 items-center gap-1.5 whitespace-nowrap rounded-full border border-accent/40 bg-accent/10 px-3 text-xs font-medium text-accent transition-colors hover:bg-accent/20 disabled:opacity-50"
+            >
+              <svg aria-hidden="true" viewBox="0 0 24 24" className="size-4" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M12 3v2m0 14v2M5.6 5.6 7 7m10 10 1.4 1.4M3 12h2m14 0h2M5.6 18.4 7 17M17 7l1.4-1.4M16 12a4 4 0 1 1-8 0 4 4 0 0 1 8 0Z" />
+              </svg>
+              Brief me
+            </button>
             <IconButton
               label={prefs.speak ? "Mute spoken replies" : "Unmute spoken replies"}
               pressed={!prefs.speak}
@@ -261,20 +441,20 @@ export default function AssistantPage() {
             <Orb state={orbState} levelRef={mic.levelRef} label={`${name} is ${STATUS[orbState].replace("…", "").toLowerCase()}`} />
           </div>
           <div className="min-h-[3.5rem] w-full max-w-xl px-2 text-center" aria-live="polite">
-            {rec.listening ? (
+            {listening ? (
               <p className="text-lg font-medium leading-snug text-fg sm:text-xl">
-                {rec.interim || <span className="text-muted">Go ahead, I&apos;m listening…</span>}
+                {rec.interim || (
+                  <span className="text-muted">{recorder.recording ? "Recording… release (or tap) to send" : "Go ahead, I'm listening…"}</span>
+                )}
                 <span aria-hidden="true" className="ml-1 inline-block h-5 w-0.5 translate-y-1 animate-pulse bg-accent" />
               </p>
-            ) : thinking ? (
-              <p className="text-sm text-muted">Working on it…</p>
+            ) : working ? (
+              <p className="text-sm text-muted">{transcribing ? "Turning your voice into text…" : receipt.busy ? "Reading your receipt…" : "Working on it…"}</p>
             ) : pending ? null : (
-              <p className="text-sm text-faint">
-                {rec.supported === false ? "Type a message below" : "Hold the mic or press Space to talk"}
-              </p>
+              <p className="text-sm text-faint">{hint}</p>
             )}
           </div>
-          {pending && !thinking && (
+          {pending && !working && (
             <div role="alertdialog" aria-labelledby="confirm-title" className="mt-2 w-full max-w-md animate-fade-in rounded-card border border-warn/40 bg-warn/10 p-4 shadow-[0_0_40px_-12px_var(--color-warn)]">
               <p id="confirm-title" className="text-xs font-semibold uppercase tracking-wider text-warn">
                 Confirm
@@ -307,7 +487,10 @@ export default function AssistantPage() {
                 <p className="text-sm text-muted">
                   Hi{user?.name ? ` ${user.name.split(" ")[0]}` : ""}! I&apos;m {name}. Try:
                 </p>
-                <div className="flex flex-wrap gap-2">
+                <div className="-mx-1 flex gap-2 overflow-x-auto px-1 pb-1 max-lg:[&>button]:shrink-0 lg:flex-wrap">
+                  <button type="button" onClick={() => void briefMe()} className="rounded-full border border-accent/50 bg-accent/10 px-3 py-1.5 text-left text-xs font-medium text-accent transition-colors hover:bg-accent/20">
+                    ☀ Brief me on my day
+                  </button>
                   {SUGGESTIONS.map((s) => (
                     <button key={s} type="button" onClick={() => void send(s)} className="rounded-full border border-line bg-surface-2/70 px-3 py-1.5 text-left text-xs text-fg transition-colors hover:border-accent/60 hover:text-accent">
                       {s}
@@ -327,21 +510,21 @@ export default function AssistantPage() {
             )}
           </div>
 
-          {(rec.supported === false || voiceError) && (
+          {voiceNotice && (
             <div role="status" className="rounded-control border border-warn/30 bg-warn/10 px-3 py-2 text-xs text-fg">
-              {rec.supported === false
-                ? "Voice input isn't supported in this browser (Firefox doesn't have speech recognition). Use Chrome, Edge or Safari for voice — or just type below."
-                : voiceError}
+              {voiceNotice}
             </div>
           )}
 
           {/* Controls */}
-          <div className="flex items-end gap-3">
+          <div className="flex items-center gap-2 sm:gap-3">
+            <FileButton id={camId} iconOnly onFile={(f) => void receipt.scan(f)} disabled={receipt.busy} label="Scan a receipt (camera or photo)" className="shrink-0" />
             <form onSubmit={onSubmit} className="flex min-w-0 flex-1 items-center gap-2 rounded-full border border-line bg-surface-2/80 py-1 pl-4 pr-1 focus-within:border-accent focus-within:ring-2 focus-within:ring-accent/25">
               <label htmlFor="assistant-input" className="sr-only">
                 Message {name}
               </label>
               <input
+                ref={inputRef}
                 id="assistant-input"
                 value={text}
                 onChange={(e) => setText(e.target.value)}
@@ -352,7 +535,7 @@ export default function AssistantPage() {
               />
               <button
                 type="submit"
-                disabled={!text.trim() || thinking}
+                disabled={!text.trim() || working}
                 aria-label="Send message"
                 className="grid size-10 shrink-0 place-items-center rounded-full bg-accent text-accent-ink transition-opacity disabled:opacity-30"
               >
@@ -368,19 +551,19 @@ export default function AssistantPage() {
               onPointerCancel={onMicUp}
               onClick={onMicClick}
               onContextMenu={(e) => e.preventDefault()}
-              disabled={rec.supported === false}
-              aria-pressed={rec.listening}
-              aria-label={rec.listening ? "Stop listening" : "Hold to talk (or press Space)"}
-              title={rec.supported === false ? "Voice input not supported in this browser" : "Hold to talk · tap for hands-free · Space"}
+              disabled={voiceMode === "none" || transcribing}
+              aria-pressed={listening}
+              aria-label={listening ? (recorder.recording ? "Stop recording and send" : "Stop listening") : "Hold to talk (or press Space)"}
+              title={voiceMode === "none" ? "Voice input not available in this browser" : voiceMode === "server" ? "Hold to record · tap to start/stop · Space" : "Hold to talk · tap for hands-free · Space"}
               className={cn(
                 "relative grid size-16 shrink-0 touch-none select-none place-items-center rounded-full transition-all duration-200",
                 "disabled:cursor-not-allowed disabled:opacity-40",
-                rec.listening
+                listening
                   ? "scale-110 bg-ok text-void shadow-[0_0_0_6px_rgba(52,211,153,0.18),0_0_40px_rgba(52,211,153,0.6)]"
                   : "bg-gradient-to-br from-accent to-glow text-void shadow-[0_0_30px_-4px_var(--color-accent)] hover:scale-105",
               )}
             >
-              {rec.listening && <span aria-hidden="true" className="absolute inset-0 animate-ping rounded-full bg-ok/40" />}
+              {listening && <span aria-hidden="true" className="absolute inset-0 animate-ping rounded-full bg-ok/40" />}
               <svg aria-hidden="true" viewBox="0 0 24 24" className="relative size-7" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                 <rect x="9" y="3" width="6" height="12" rx="3" fill="currentColor" />
                 <path d="M5 11a7 7 0 0 0 14 0M12 18v3" />
@@ -389,7 +572,82 @@ export default function AssistantPage() {
           </div>
         </section>
       </div>
+      {scan && <ReceiptDialog scan={scan} onClose={() => setScan(null)} onSaved={onReceiptSaved} />}
     </main>
+  );
+}
+
+function WakeIndicator({ enabled, mode, status, name }: { enabled: boolean; mode: string | null; status: string; name: string }) {
+  if (!enabled || mode === null) return null;
+  const text =
+    mode !== "browser"
+      ? `“Hey ${name}” needs Chrome or Edge`
+      : status === "listening"
+        ? `Listening for “Hey ${name}”`
+        : status === "blocked"
+          ? "Wake word needs mic access"
+          : status === "error"
+            ? "Wake word paused (speech service unreachable)"
+            : `“Hey ${name}” paused`;
+  return (
+    <p className="mt-0.5 flex min-w-0 items-center gap-1.5 text-[11px] text-faint" aria-live="polite">
+      <span
+        aria-hidden="true"
+        className={cn("size-1.5 shrink-0 rounded-full", status === "listening" && mode === "browser" ? "animate-pulse bg-accent" : status === "blocked" || status === "error" ? "bg-warn" : "bg-line-strong")}
+      />
+      <span className="truncate">{text}</span>
+    </p>
+  );
+}
+
+function ReceiptDialog({ scan, onClose, onSaved }: { scan: ScanOutcome; onClose: () => void; onSaved: (e: Expense) => void }) {
+  const titleId = useId();
+  const panelRef = useRef<HTMLDivElement>(null);
+  const closeRef = useRef(onClose);
+  closeRef.current = onClose;
+  // Mount-only: Escape closes, Tab stays inside the dialog, focus returns to the opener on close.
+  useEffect(() => {
+    const prev = document.activeElement as HTMLElement | null;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") return closeRef.current();
+      if (e.key !== "Tab" || !panelRef.current) return;
+      const els = [...panelRef.current.querySelectorAll<HTMLElement>("button:not([disabled]),input:not([disabled]),select,textarea,[href]")];
+      if (!els.length) return;
+      const first = els[0];
+      const last = els[els.length - 1];
+      if (e.shiftKey && document.activeElement === first) {
+        e.preventDefault();
+        last.focus();
+      } else if (!e.shiftKey && document.activeElement === last) {
+        e.preventDefault();
+        first.focus();
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    const body = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    return () => {
+      window.removeEventListener("keydown", onKey);
+      document.body.style.overflow = body;
+      prev?.focus?.();
+    };
+  }, []);
+  return (
+    <div className="fixed inset-0 z-40 grid place-items-center bg-void/75 p-4 backdrop-blur-sm" onMouseDown={(e) => e.target === e.currentTarget && onClose()}>
+      <div ref={panelRef} role="dialog" aria-modal="true" aria-labelledby={titleId} className="max-h-[calc(100dvh-2rem)] w-full max-w-md animate-fade-in overflow-y-auto rounded-card border border-line-strong bg-surface p-4 shadow-2xl sm:p-5">
+        <div className="mb-3 flex items-center justify-between gap-3">
+          <h2 id={titleId} className="text-sm font-semibold">
+            Confirm receipt
+          </h2>
+          <button type="button" onClick={onClose} aria-label="Close" className="grid size-8 place-items-center rounded-control text-muted hover:bg-surface-2 hover:text-fg">
+            <svg aria-hidden="true" viewBox="0 0 24 24" className="size-4" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
+              <path d="M6 6l12 12M18 6 6 18" />
+            </svg>
+          </button>
+        </div>
+        <AddExpenseForm defaultDate={dayKey()} draft={scan} onSaved={onSaved} onCancelDraft={onClose} />
+      </div>
+    </div>
   );
 }
 
@@ -403,6 +661,12 @@ function Caption({ msg, name, currency }: { msg: Msg; name: string; currency: st
         </p>
       </div>
     );
+  if (msg.role === "notice")
+    return (
+      <p className="animate-fade-in rounded-control border border-warn/30 bg-warn/10 px-3 py-2 text-sm text-fg" role="status">
+        {msg.text}
+      </p>
+    );
   if (msg.role === "error")
     return (
       <p className="animate-fade-in rounded-control border border-danger/40 bg-danger/10 px-3 py-2 text-sm text-danger" role="alert">
@@ -411,6 +675,7 @@ function Caption({ msg, name, currency }: { msg: Msg; name: string; currency: st
     );
   return (
     <div className="animate-fade-in">
+      {msg.tag && <p className="mb-1 text-[11px] font-medium uppercase tracking-wider text-accent/80">☀ {msg.tag}</p>}
       <p className="max-w-[92%] rounded-2xl rounded-bl-md border border-line/60 bg-surface-2/80 px-3 py-2 text-sm leading-relaxed text-fg">
         <span className="sr-only">{name}: </span>
         {msg.text}
@@ -425,7 +690,8 @@ function Caption({ msg, name, currency }: { msg: Msg; name: string; currency: st
                 a.ok ? "border-ok/40 bg-ok/10 text-ok" : "border-danger/40 bg-danger/10 text-danger",
               )}
             >
-              {a.ok ? "✓ " : "✕ "}
+              <span aria-hidden="true" className="mr-1">{a.ok ? ACTION_ICON[actionKind(a.tool)] : "✕"}</span>
+              <span className="sr-only">{a.ok ? "Done: " : "Failed: "}</span>
               {describeAction(a, currency)}
             </li>
           ))}

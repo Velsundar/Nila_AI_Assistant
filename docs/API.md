@@ -11,6 +11,7 @@ Errors: `{ "error": { "code": "VALIDATION_ERROR" | "UNAUTHORIZED" | "NOT_FOUND" 
 | POST | /api/auth/login | LoginInput | AuthResponse |
 | GET | /api/auth/me | — | `{ user }` |
 | PATCH | /api/auth/me | UpdateMeInput | `{ user }` |
+| POST | /api/auth/logout-all | — | 204. Revokes every token for this user (including the one used); log in again |
 | GET | /api/expenses | ?from&to&category&limit | `{ expenses }` newest first |
 | POST | /api/expenses | CreateExpenseInput | `{ expense }` (201) |
 | PATCH | /api/expenses/:id | UpdateExpenseInput | `{ expense }` |

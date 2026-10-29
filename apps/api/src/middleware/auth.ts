@@ -20,11 +20,14 @@ export const requireAuth: RequestHandler = (req, _res, next) => {
   const header = req.headers.authorization ?? "";
   const m = /^Bearer\s+(.+)$/i.exec(header);
   if (!m) return next(new HttpError(401, "UNAUTHORIZED", "Missing bearer token"));
-  const userId = verifyToken(m[1].trim());
-  if (!userId || !isValidObjectId(userId)) return next(new HttpError(401, "UNAUTHORIZED", "Invalid or expired token"));
-  UserModel.findById(userId)
+  const claims = verifyToken(m[1].trim());
+  if (!claims || !isValidObjectId(claims.userId)) return next(new HttpError(401, "UNAUTHORIZED", "Invalid or expired token"));
+  UserModel.findById(claims.userId)
     .then((user) => {
       if (!user) return next(new HttpError(401, "UNAUTHORIZED", "User no longer exists"));
+      if ((user.tokenVersion ?? 0) !== claims.tokenVersion) {
+        return next(new HttpError(401, "UNAUTHORIZED", "Session was signed out, please log in again"));
+      }
       req.user = user;
       req.userId = user._id.toString();
       next();

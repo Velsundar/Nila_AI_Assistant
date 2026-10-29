@@ -1,4 +1,4 @@
-import type { Category, Expense, Reminder, User, ExpenseSource } from "@nova/shared";
+import type { Category, Expense, Note, Reminder, Task, TaskPriority, User, ExpenseSource } from "@nova/shared";
 import { ASSISTANT_NAME, DEFAULT_CURRENCY } from "@nova/shared";
 
 type Id = { toString(): string };
@@ -10,6 +10,7 @@ export function toUser(u: {
   email: string;
   currency?: string | null;
   assistantName?: string | null;
+  city?: string | null;
   createdAt?: Date | null;
 }): User {
   return {
@@ -18,6 +19,7 @@ export function toUser(u: {
     email: u.email,
     currency: u.currency || DEFAULT_CURRENCY,
     assistantName: u.assistantName || ASSISTANT_NAME,
+    ...(u.city ? { city: u.city } : {}),
     createdAt: iso(u.createdAt),
   };
 }
@@ -52,6 +54,32 @@ export function toReminder(r: { _id: Id; text: string; dateTime: Date; done?: bo
     done: !!r.done,
     createdAt: iso(r.createdAt),
   };
+}
+
+export function toTask(t: {
+  _id: Id;
+  title: string;
+  list: string;
+  dueDate?: Date | null;
+  priority?: string | null;
+  done?: boolean | null;
+  completedAt?: Date | null;
+  createdAt?: Date | null;
+}): Task {
+  return {
+    id: t._id.toString(),
+    title: t.title,
+    list: t.list,
+    ...(t.dueDate ? { dueDate: iso(t.dueDate) } : {}),
+    priority: (t.priority || "normal") as TaskPriority,
+    done: !!t.done,
+    ...(t.completedAt ? { completedAt: iso(t.completedAt) } : {}),
+    createdAt: iso(t.createdAt),
+  };
+}
+
+export function toNote(n: { _id: Id; text: string; createdAt?: Date | null; updatedAt?: Date | null }): Note {
+  return { id: n._id.toString(), text: n.text, createdAt: iso(n.createdAt), updatedAt: iso(n.updatedAt ?? n.createdAt) };
 }
 
 export const round2 = (n: number) => Math.round(n * 100) / 100;

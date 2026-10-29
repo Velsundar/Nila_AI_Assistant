@@ -1,11 +1,13 @@
 "use client";
 
 import { UpdateMeSchema } from "@nova/shared";
-import { useEffect, useMemo, useState, type FormEvent } from "react";
+import { useEffect, useId, useMemo, useRef, useState, type FormEvent } from "react";
 import { useAuth } from "@/components/AuthProvider";
 import { Button, Card, Notice, SelectField, TextField } from "@/components/ui";
 import { useSpeechSynthesis } from "@/hooks/useSpeechSynthesis";
 import { api, errorMessage, fieldErrors, zodFieldErrors } from "@/lib/api";
+import { cn } from "@/lib/cn";
+import { notifyDataChanged } from "@/lib/events";
 import { useVoicePrefs } from "@/lib/prefs";
 
 const LANGS = [
@@ -24,10 +26,16 @@ export default function SettingsPage() {
   const [busy, setBusy] = useState(false);
   const [prefs, setPrefs] = useVoicePrefs();
   const tts = useSpeechSynthesis();
+  const [srSupported, setSrSupported] = useState<boolean | null>(null);
 
   useEffect(() => {
     if (user) setAssistantName(user.assistantName);
   }, [user]);
+
+  useEffect(() => {
+    const w = window as unknown as { SpeechRecognition?: unknown; webkitSpeechRecognition?: unknown };
+    setSrSupported(!!(w.SpeechRecognition ?? w.webkitSpeechRecognition));
+  }, []);
 
   // English + Hindi voices first, then everything else.
   const voices = useMemo(() => {
@@ -90,6 +98,29 @@ export default function SettingsPage() {
           )}
         </Card>
 
+        <CityCard />
+
+        <Card title="Assistant behaviour">
+          <div className="grid gap-4">
+            <Toggle
+              checked={prefs.wakeWord}
+              onChange={(v) => setPrefs({ wakeWord: v })}
+              label={`Wake word: “Hey ${name}”`}
+              description={
+                srSupported === false
+                  ? "Needs Chrome or Edge (this browser has no speech recognition)."
+                  : `While the assistant page is open and visible, ${name} listens in the background for “Hey ${name}”. Say a command right after it, e.g. “Hey ${name}, what's the weather?”. Audio goes to your browser's speech service.`
+              }
+            />
+            <Toggle
+              checked={prefs.autoBriefing}
+              onChange={(v) => setPrefs({ autoBriefing: v })}
+              label="Auto-briefing"
+              description={`The first time you open the assistant each day, ${name} reads you the weather, what's due and your spending.`}
+            />
+          </div>
+        </Card>
+
         <Card title="Voice">
           {tts.supported === false ? (
             <Notice tone="warn">This browser can&apos;t speak replies (no speechSynthesis). Replies will be shown as text.</Notice>
@@ -132,8 +163,103 @@ export default function SettingsPage() {
             ))}
           </SelectField>
         </Card>
-        <p className="text-xs text-faint">Voice settings are saved in this browser only.</p>
+        <p className="text-xs text-faint">Voice, wake word and briefing settings are saved in this browser only.</p>
       </div>
     </main>
+  );
+}
+
+function Toggle({ checked, onChange, label, description }: { checked: boolean; onChange: (v: boolean) => void; label: string; description: string }) {
+  const id = useId();
+  return (
+    <div className="flex items-start gap-3">
+      <div className="min-w-0 flex-1">
+        <label htmlFor={id} className="text-sm font-medium text-fg">
+          {label}
+        </label>
+        <p id={`${id}-d`} className="mt-0.5 text-xs leading-relaxed text-faint">
+          {description}
+        </p>
+      </div>
+      <button
+        id={id}
+        type="button"
+        role="switch"
+        aria-checked={checked}
+        aria-describedby={`${id}-d`}
+        onClick={() => onChange(!checked)}
+        className={cn(
+          "relative mt-0.5 h-6 w-11 shrink-0 rounded-full border transition-colors",
+          checked ? "border-accent bg-accent/80" : "border-line-strong bg-surface-3",
+        )}
+      >
+        <span aria-hidden="true" className={cn("absolute top-0.5 size-4.5 rounded-full bg-fg shadow transition-[left]", checked ? "left-[1.4rem]" : "left-0.5")} />
+      </button>
+    </div>
+  );
+}
+
+function CityCard() {
+  const { user, setUser } = useAuth();
+  const [city, setCity] = useState(user?.city ?? "");
+  const [error, setError] = useState<string | undefined>();
+  const [saved, setSaved] = useState<string | null>(null);
+  const submitting = useRef(false);
+  const [busy, setBusy] = useState(false);
+
+  useEffect(() => setCity(user?.city ?? ""), [user?.city]);
+
+  async function save(e: FormEvent) {
+    e.preventDefault();
+    if (submitting.current) return; // ref, not state: blocks same-tick double submits
+    setSaved(null);
+    const value = city.trim();
+    if (value.length > 80) return setError("Use at most 80 characters.");
+    setError(undefined);
+    submitting.current = true;
+    setBusy(true);
+    try {
+      const { user: updated } = await api.auth.updateMe({ city: value });
+      setUser(updated);
+      setCity(updated.city ?? "");
+      setSaved(updated.city ? `Weather will be for ${updated.city}.` : "Home city cleared.");
+      notifyDataChanged();
+    } catch (err) {
+      // Unknown city → 400 VALIDATION_ERROR with a field message; show the API's words.
+      setError(fieldErrors(err).city ?? errorMessage(err));
+    } finally {
+      submitting.current = false;
+      setBusy(false);
+    }
+  }
+
+  return (
+    <Card title="Home city">
+      <form onSubmit={save} noValidate className="flex flex-col gap-3 sm:flex-row sm:items-start">
+        <TextField
+          label="City"
+          value={city}
+          maxLength={80}
+          autoComplete="address-level2"
+          placeholder="Bengaluru"
+          onChange={(e) => {
+            setCity(e.target.value);
+            setSaved(null);
+            setError(undefined);
+          }}
+          error={error}
+          hint="Used for the weather in your daily briefing. Leave empty to turn weather off."
+          className="flex-1"
+        />
+        <Button type="submit" loading={busy} className="sm:mt-[1.4rem]">
+          Save
+        </Button>
+      </form>
+      {saved && (
+        <p role="status" className="mt-3 text-sm text-ok">
+          {saved}
+        </p>
+      )}
+    </Card>
   );
 }

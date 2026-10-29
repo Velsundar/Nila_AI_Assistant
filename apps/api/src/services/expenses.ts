@@ -3,15 +3,23 @@ import type { Category, CreateExpenseInput, Expense, SpendingSummary, UpdateExpe
 import { CATEGORIES } from "@nova/shared";
 import { ExpenseModel } from "../models/Expense";
 import { notFound } from "../errors";
-import { parseExpenseDate, resolveRange } from "./dates";
+import { parseExpenseDate, resolveRange, resolveTimezone } from "./dates";
+import { HttpError } from "../errors";
 import { round2, toExpense } from "./serialize";
 
 const oid = (id: string) => new Types.ObjectId(id);
 
+/** Round to paise and reject anything that rounds to zero (e.g. 0.004). */
+export function money2(n: number, field = "amount"): number {
+  const v = round2(n);
+  if (!(v >= 0.01)) throw new HttpError(400, "VALIDATION_ERROR", `${field} must be at least 0.01`, { fieldErrors: { [field]: ["Must be at least 0.01"] } });
+  return v;
+}
+
 export async function createExpense(userId: string, input: CreateExpenseInput, tz: string): Promise<Expense> {
   const doc = await ExpenseModel.create({
     userId: oid(userId),
-    amount: round2(input.amount),
+    amount: money2(input.amount),
     category: input.category,
     merchant: input.merchant?.trim() || undefined,
     note: input.note?.trim() || undefined,
@@ -54,7 +62,7 @@ export async function updateExpense(userId: string, id: string, input: UpdateExp
   if (!isValidObjectId(id)) throw notFound("Expense");
   const set: Record<string, unknown> = {};
   const unset: Record<string, 1> = {};
-  if (input.amount !== undefined) set.amount = round2(input.amount);
+  if (input.amount !== undefined) set.amount = money2(input.amount);
   if (input.category !== undefined) set.category = input.category;
   if (input.source !== undefined) set.source = input.source;
   if (input.date !== undefined) set.date = parseExpenseDate(input.date, tz);
@@ -92,6 +100,7 @@ export async function getSummary(
   q: { from?: string; to?: string; category?: Category },
   tz: string,
 ): Promise<SpendingSummary> {
+  tz = resolveTimezone(tz); // canonical name only ever reaches Mongo
   const { start, end } = resolveRange(q.from, q.to, tz);
   const match: Record<string, unknown> = { userId: oid(userId), date: { $gte: start, $lt: end } };
   if (q.category) match.category = q.category;

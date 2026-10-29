@@ -1,6 +1,6 @@
 /**
  * Seed a demo account: demo@nova.app / password123 with ~2 months of realistic INR expenses,
- * a few budgets, reminders and memories. Idempotent: wipes and recreates only the demo user's data.
+ * a few budgets, reminders, memories, tasks, notes and home city Bengaluru. Idempotent: wipes and recreates only the demo user's data.
  */
 import type { Category } from "@nova/shared";
 import { connectDb, disconnectDb } from "./db";
@@ -11,6 +11,8 @@ import { BudgetModel } from "./models/Budget";
 import { ReminderModel } from "./models/Reminder";
 import { MemoryModel } from "./models/Memory";
 import { ConversationModel } from "./models/Conversation";
+import { TaskModel } from "./models/Task";
+import { NoteModel } from "./models/Note";
 import { hashPassword } from "./services/auth";
 import { addDays, localDateString, zonedParts, zonedToUtc, pad } from "./services/dates";
 
@@ -89,11 +91,21 @@ async function main() {
       ReminderModel.deleteMany({ userId }),
       MemoryModel.deleteMany({ userId }),
       ConversationModel.deleteMany({ userId }),
+      TaskModel.deleteMany({ userId }),
+      NoteModel.deleteMany({ userId }),
       UserModel.deleteOne({ _id: userId }),
     ]);
   }
 
-  const user = await UserModel.create({ name: "Demo User", email: EMAIL, passwordHash: await hashPassword("password123") });
+  // Coordinates from Open-Meteo geocoding, stored directly so seeding needs no network.
+  const user = await UserModel.create({
+    name: "Demo User",
+    email: EMAIL,
+    passwordHash: await hashPassword("password123"),
+    city: "Bengaluru",
+    cityLat: 12.97194,
+    cityLon: 77.59369,
+  });
   const userId = user._id;
   const now = new Date();
 
@@ -128,8 +140,42 @@ async function main() {
     { userId, fact: "Commutes to the office in Bengaluru on weekdays" },
   ]);
 
+  const todayYmd = localDateString(now, TZ);
+  const noon = (ymd: string) => at(ymd, 12, 0);
+  const task = (title: string, list: string, extra: Record<string, unknown> = {}) => ({
+    userId,
+    title,
+    list,
+    listKey: list.toLowerCase(),
+    priority: "normal",
+    done: false,
+    ...extra,
+  });
+  const tasks = [
+    task("Milk", "Shopping"),
+    task("Eggs", "Shopping"),
+    task("Bread", "Shopping"),
+    task("Coffee beans", "Shopping", { done: true, completedAt: at(addDays(todayYmd, -1), 18) }),
+    task("Call the plumber", "Inbox", { dueDate: noon(todayYmd), priority: "high" }),
+    task("Renew passport", "Inbox", { dueDate: noon(addDays(todayYmd, -2)) }),
+    task("Book dentist appointment", "Inbox", { dueDate: noon(addDays(todayYmd, 3)) }),
+    task("Finish quarterly report", "Work", { dueDate: noon(addDays(todayYmd, 1)), priority: "high" }),
+    task("Reply to Priya's email", "Work"),
+  ];
+  await TaskModel.insertMany(tasks);
+
+  await NoteModel.insertMany([
+    { userId, text: "Home WiFi password is sunflower@2024" },
+    { userId, text: "Parking spot at office is B2-47" },
+    { userId, text: "Mom's birthday gift idea: a Kindle Paperwhite" },
+    { userId, text: "Gym locker combination 3-17-29" },
+  ]);
+
   const total = rows.reduce((a, r) => a + r.amount, 0);
-  console.log(`[seed] Created ${EMAIL} / password123 with ${rows.length} expenses (₹${total.toLocaleString("en-IN")}), 6 budgets, 4 reminders, 3 memories`);
+  console.log(
+    `[seed] Created ${EMAIL} / password123 (city Bengaluru) with ${rows.length} expenses (₹${total.toLocaleString("en-IN")}), ` +
+      `6 budgets, 4 reminders, 3 memories, ${tasks.length} tasks, 4 notes`,
+  );
   await disconnectDb();
 }
 

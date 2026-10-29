@@ -1,7 +1,8 @@
 import Ionicons from "@expo/vector-icons/Ionicons";
 import * as Haptics from "expo-haptics";
-import { router } from "expo-router";
-import { useCallback, useRef, useState } from "react";
+import { router, useFocusEffect } from "expo-router";
+import * as SecureStore from "expo-secure-store";
+import { useCallback, useEffect, useRef, useState } from "react";
 import {
   KeyboardAvoidingView,
   Platform,
@@ -23,10 +24,11 @@ import { Orb, type OrbState } from "@/components/Orb";
 import { Banner } from "@/components/ui";
 import { Colors, Font, HitSize, OrbColors, Radius, Spacing } from "@/constants/theme";
 import { useVoice } from "@/hooks/useVoice";
+import { describeAction } from "@/lib/actions";
 import { api, errorMessage } from "@/lib/api";
 import { useAppState } from "@/lib/app-state";
 import { useAuth } from "@/lib/auth";
-import { deviceTimezone, prettifyTool } from "@/lib/format";
+import { deviceTimezone, localISODate } from "@/lib/format";
 
 type Caption = {
   id: number;
@@ -43,11 +45,23 @@ const STATUS: Record<OrbState, string> = {
   speaking: "Speaking…",
 };
 
-const DATA_TOOL = /expense|budget|spend|summary|categor/i;
+const LAST_AUTO_BRIEFING_KEY = "nova.lastAutoBriefing";
+
+/** Personal-assistant starters shown before the first message. */
+const SUGGESTIONS = [
+  "Brief me on my day",
+  "Add milk and eggs to my shopping list",
+  "What's on my to-do list today?",
+  "Note: parked on level 3, spot B12",
+  "Remind me to call mom at 7pm",
+  "What's the weather tomorrow?",
+  "I spent 250 on lunch",
+  "How much did I spend this week?",
+];
 
 export default function AssistantScreen() {
   const { user } = useAuth();
-  const { speakReplies, invalidateData } = useAppState();
+  const { speakReplies, invalidateData, wakeWord, autoBriefing, pendingIntent, setPendingIntent } = useAppState();
   const assistantName = user?.assistantName || ASSISTANT_NAME;
   const { width, height } = useWindowDimensions();
   const orbSize = Math.round(Math.max(110, Math.min(width * 0.5, height * 0.24, 240)));
@@ -57,11 +71,21 @@ export default function AssistantScreen() {
   const [sending, setSending] = useState(false);
   const [pending, setPending] = useState<{ summary: string } | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
+  const [focused, setFocused] = useState(false);
+  /** Synchronous guard: `sending` state is stale inside closures, so two quick taps could both send. */
+  const busyRef = useRef(false);
   const conversationId = useRef<string | undefined>(undefined);
   const nextId = useRef(1);
   const scrollRef = useRef<ScrollViewInstance>(null);
   const inputRef = useRef<TextInputInstance>(null);
   const speakRef = useRef<(t: string) => void>(() => {});
+
+  useFocusEffect(
+    useCallback(() => {
+      setFocused(true);
+      return () => setFocused(false);
+    }, []),
+  );
 
   const push = useCallback((c: Omit<Caption, "id">) => {
     setCaptions((prev) => [...prev.slice(-49), { ...c, id: nextId.current++ }]);
@@ -70,7 +94,8 @@ export default function AssistantScreen() {
   const send = useCallback(
     async (raw: string) => {
       const message = raw.trim();
-      if (!message || sending) return;
+      if (!message || busyRef.current) return;
+      busyRef.current = true;
       setNotice(null);
       setPending(null);
       push({ role: "user", text: message });
@@ -89,21 +114,96 @@ export default function AssistantScreen() {
       } catch (e) {
         push({ role: "assistant", text: errorMessage(e), failed: true });
       } finally {
+        busyRef.current = false;
         setSending(false);
       }
     },
-    [sending, push, invalidateData, speakReplies],
+    [push, invalidateData, speakReplies],
   );
 
-  const voice = useVoice({ onFinalTranscript: (text) => void send(text) });
+  /** Briefing / weekly report straight from REST (no agent, no AI tokens) and always spoken. */
+  const readOut = useCallback(
+    async (kind: "briefing" | "weeklyReport", prompt: string) => {
+      if (busyRef.current) return;
+      busyRef.current = true;
+      setNotice(null);
+      push({ role: "user", text: prompt });
+      setSending(true);
+      try {
+        const text =
+          kind === "briefing"
+            ? (await api.briefing.today({ tz: deviceTimezone() })).text
+            : (await api.reports.weekly({ tz: deviceTimezone() })).text;
+        push({
+          role: "assistant",
+          text,
+          actions: [{ tool: kind === "briefing" ? "getDailyBriefing" : "getWeeklyReport", args: {}, ok: true }],
+        });
+        speakRef.current(text);
+      } catch (e) {
+        push({ role: "assistant", text: errorMessage(e), failed: true });
+      } finally {
+        busyRef.current = false;
+        setSending(false);
+      }
+    },
+    [push],
+  );
+  const briefMe = useCallback(() => {
+    void Haptics.selectionAsync().catch(() => {});
+    void readOut("briefing", "Brief me");
+  }, [readOut]);
+
+  const voice = useVoice({
+    onFinalTranscript: (text) => void send(text),
+    wakeWord: {
+      enabled: wakeWord,
+      active: focused && !sending,
+      name: assistantName,
+      onCommand: (cmd) => {
+        void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success).catch(() => {});
+        void send(cmd);
+      },
+      onWake: () => void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success).catch(() => {}),
+    },
+  });
   speakRef.current = voice.speak;
 
-  const orbState: OrbState = voice.listening ? "listening" : sending ? "thinking" : voice.speaking ? "speaking" : "idle";
+  const orbState: OrbState = voice.listening
+    ? "listening"
+    : sending || voice.transcribing
+      ? "thinking"
+      : voice.speaking
+        ? "speaking"
+        : "idle";
+
+  // A tapped notification (e.g. the Sunday weekly report) queued something for us.
+  useEffect(() => {
+    if (!pendingIntent || !focused) return;
+    setPendingIntent(null);
+    void readOut(pendingIntent.kind, pendingIntent.kind === "weeklyReport" ? "Read my weekly report" : "Brief me");
+  }, [pendingIntent, focused, setPendingIntent, readOut]);
+
+  // Optional auto-briefing: once per day, the first time the assistant is opened.
+  useEffect(() => {
+    if (!autoBriefing || !focused) return;
+    let cancelled = false;
+    (async () => {
+      const today = localISODate();
+      const last = await SecureStore.getItemAsync(LAST_AUTO_BRIEFING_KEY).catch(() => null);
+      if (cancelled || last === today) return;
+      await SecureStore.setItemAsync(LAST_AUTO_BRIEFING_KEY, today).catch(() => {});
+      if (!cancelled) void readOut("briefing", "Good morning — brief me");
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [autoBriefing, focused, readOut]);
 
   const startTalking = useCallback(async () => {
     void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium).catch(() => {});
     if (!voice.available) {
-      setNotice("Voice input isn't available in Expo Go — it needs a development build. Type your message below instead.");
+      setNotice("Voice input isn't available right now. Type your message below instead.");
       inputRef.current?.focus();
       return;
     }
@@ -123,8 +223,17 @@ export default function AssistantScreen() {
   };
 
   const onActionPress = (a: AgentAction) => {
-    if (DATA_TOOL.test(a.tool)) router.navigate("/expenses");
+    const route = describeAction(a).route;
+    if (route) router.navigate(route);
   };
+
+  const statusText = voice.transcribing ? "Transcribing…" : orbState === "idle" && voice.wakeListening ? `Say "Hey ${assistantName}"` : STATUS[orbState];
+  const hint =
+    voice.mode === "native"
+      ? `Tap the mic to talk · hold for push-to-talk${wakeWord ? ` · or say "Hey ${assistantName}"` : ""}`
+      : voice.mode === "server"
+        ? "Hold the mic to talk (or tap to start, tap to send)"
+        : "Text mode — voice input is unavailable";
 
   const banner = voice.error ?? notice;
 
@@ -142,12 +251,33 @@ export default function AssistantScreen() {
               {assistantName}
             </Text>
           </View>
-          <View
-            style={[styles.statusPill, { borderColor: OrbColors[orbState] }]}
-            accessibilityLabel={`Status: ${STATUS[orbState]}`}
-          >
-            <View style={[styles.statusDot, { backgroundColor: OrbColors[orbState] }]} />
-            <Text style={[styles.statusText, { color: OrbColors[orbState] }]}>{STATUS[orbState]}</Text>
+          <View style={styles.headerRight}>
+            <View
+              style={[styles.statusPill, { borderColor: OrbColors[orbState] }]}
+              accessibilityLabel={`Status: ${statusText}`}
+              accessibilityLiveRegion="polite"
+            >
+              {voice.wakeListening && orbState === "idle" ? (
+                <Ionicons name="ear-outline" size={12} color={OrbColors[orbState]} />
+              ) : (
+                <View style={[styles.statusDot, { backgroundColor: OrbColors[orbState] }]} />
+              )}
+              <Text style={[styles.statusText, { color: OrbColors[orbState] }]} numberOfLines={1}>
+                {statusText}
+              </Text>
+            </View>
+            <Pressable
+              onPress={briefMe}
+              disabled={sending}
+              accessibilityRole="button"
+              accessibilityLabel="Brief me"
+              accessibilityHint="Reads today's briefing aloud: weather, reminders, tasks and spending"
+              accessibilityState={{ disabled: sending }}
+              style={({ pressed }) => [styles.briefBtn, (pressed || sending) && { opacity: 0.6 }]}
+            >
+              <Ionicons name="sunny-outline" size={16} color={Colors.warning} />
+              <Text style={styles.briefText}>Brief me</Text>
+            </Pressable>
           </View>
         </View>
 
@@ -155,12 +285,14 @@ export default function AssistantScreen() {
           <Orb state={orbState} size={orbSize} volume={voice.volume} />
           <Text style={styles.interim} numberOfLines={3} accessibilityLiveRegion="polite">
             {voice.listening
-              ? voice.interim || "Go ahead, I'm listening…"
-              : sending
-                ? "…"
-                : captions.length === 0
-                  ? `Try "I spent 250 on lunch" or "How much did I spend this month?"`
-                  : ""}
+              ? voice.interim || (voice.mode === "server" ? "Recording… release to send" : "Go ahead, I'm listening…")
+              : voice.transcribing
+                ? "Transcribing…"
+                : sending
+                  ? "…"
+                  : captions.length === 0
+                    ? `Ask me anything — expenses, tasks, notes, reminders, weather.`
+                    : ""}
           </Text>
         </View>
 
@@ -180,28 +312,53 @@ export default function AssistantScreen() {
               </Text>
               {!!c.actions?.length && (
                 <View style={styles.chips}>
-                  {c.actions.map((a, i) => (
-                    <Pressable
-                      key={`${a.tool}-${i}`}
-                      onPress={() => onActionPress(a)}
-                      accessibilityRole="button"
-                      accessibilityLabel={`${prettifyTool(a.tool)} ${a.ok ? "succeeded" : `failed${a.error ? `: ${a.error}` : ""}`}`}
-                      accessibilityHint={DATA_TOOL.test(a.tool) ? "Opens the expenses tab" : undefined}
-                      style={[styles.chip, { borderColor: a.ok ? Colors.success : Colors.danger }]}
-                    >
-                      <Ionicons
-                        name={a.ok ? "checkmark-circle" : "alert-circle"}
-                        size={14}
-                        color={a.ok ? Colors.success : Colors.danger}
-                      />
-                      <Text style={styles.chipText}>{prettifyTool(a.tool)}</Text>
-                    </Pressable>
-                  ))}
+                  {c.actions.map((a, i) => {
+                    const chip = describeAction(a);
+                    return (
+                      <Pressable
+                        key={`${a.tool}-${i}`}
+                        onPress={() => onActionPress(a)}
+                        disabled={!chip.route}
+                        accessibilityRole={chip.route ? "button" : "text"}
+                        accessibilityLabel={`${chip.label} ${a.ok ? "succeeded" : `failed${a.error ? `: ${a.error}` : ""}`}`}
+                        accessibilityHint={chip.route === "/expenses" ? "Opens the expenses tab" : chip.route === "/today" ? "Opens the today tab" : undefined}
+                        style={[styles.chip, { borderColor: a.ok ? Colors.success : Colors.danger }]}
+                      >
+                        <Ionicons name={a.ok ? chip.icon : "alert-circle"} size={14} color={a.ok ? Colors.success : Colors.danger} />
+                        <Text style={styles.chipText}>{chip.label}</Text>
+                        {chip.route && <Ionicons name="chevron-forward" size={12} color={Colors.textFaint} />}
+                      </Pressable>
+                    );
+                  })}
                 </View>
               )}
             </View>
           ))}
         </ScrollView>
+
+        {captions.length === 0 && !voice.listening && (
+          <ScrollView
+            horizontal
+            showsHorizontalScrollIndicator={false}
+            style={styles.suggestScroll}
+            contentContainerStyle={styles.suggestions}
+            keyboardShouldPersistTaps="handled"
+            accessibilityLabel="Suggestions"
+          >
+            {SUGGESTIONS.map((sg) => (
+              <Pressable
+                key={sg}
+                onPress={() => (sg === "Brief me on my day" ? briefMe() : void send(sg))}
+                disabled={sending}
+                accessibilityRole="button"
+                accessibilityLabel={`Suggestion: ${sg}`}
+                style={({ pressed }) => [styles.suggestion, pressed && { backgroundColor: Colors.surfaceAlt }]}
+              >
+                <Text style={styles.suggestionText}>{sg}</Text>
+              </Pressable>
+            ))}
+          </ScrollView>
+        )}
 
         {pending && !sending && (
           <View style={styles.confirm} accessibilityLiveRegion="assertive">
@@ -272,16 +429,14 @@ export default function AssistantScreen() {
           <MicButton
             listening={voice.listening}
             unavailable={!voice.available}
-            disabled={sending}
+            disabled={sending || voice.transcribing}
             volume={voice.volume}
             size={Math.min(72, Math.max(60, width * 0.17))}
             onStart={() => void startTalking()}
             onStop={stopTalking}
           />
         </View>
-        <Text style={styles.hint}>
-          {voice.available ? "Tap the mic to talk · hold for push-to-talk" : "Text mode — voice needs a dev build"}
-        </Text>
+        <Text style={styles.hint}>{hint}</Text>
       </KeyboardAvoidingView>
     </SafeAreaView>
   );
@@ -298,8 +453,34 @@ const styles = StyleSheet.create({
     paddingTop: Spacing.sm,
   },
   kicker: { color: Colors.textFaint, ...Font.tiny, fontWeight: "700" },
+  headerRight: { flexDirection: "row", alignItems: "center", gap: Spacing.sm, flexShrink: 1 },
+  briefBtn: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 4,
+    minHeight: HitSize - 8,
+    paddingHorizontal: Spacing.md,
+    borderRadius: Radius.pill,
+    borderWidth: 1,
+    borderColor: "rgba(251,191,36,0.5)",
+    backgroundColor: "rgba(251,191,36,0.08)",
+  },
+  briefText: { color: Colors.warning, ...Font.small, fontWeight: "700" },
+  suggestScroll: { flexGrow: 0, maxHeight: 52 },
+  suggestions: { paddingHorizontal: Spacing.lg, gap: Spacing.sm, alignItems: "center", paddingVertical: Spacing.xs },
+  suggestion: {
+    borderWidth: 1,
+    borderColor: Colors.borderStrong,
+    borderRadius: Radius.pill,
+    paddingHorizontal: Spacing.md,
+    minHeight: 38,
+    justifyContent: "center",
+    backgroundColor: Colors.surface,
+  },
+  suggestionText: { color: Colors.text, ...Font.small, fontWeight: "600" },
   name: { color: Colors.text, fontSize: 22, fontWeight: "800", letterSpacing: 2 },
   statusPill: {
+    flexShrink: 1,
     flexDirection: "row",
     alignItems: "center",
     gap: 6,

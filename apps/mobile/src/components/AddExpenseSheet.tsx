@@ -1,5 +1,5 @@
 import Ionicons from "@expo/vector-icons/Ionicons";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import {
   KeyboardAvoidingView,
   Modal,
@@ -11,15 +11,31 @@ import {
   View,
 } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
-import { CATEGORIES, CreateExpenseSchema, type Category } from "@nova/shared";
+import { CATEGORIES, CreateExpenseSchema, type Category, type ReceiptScanResult } from "@nova/shared";
 
 import { Banner, Button, TextField } from "@/components/ui";
 import { CategoryMeta, Colors, Font, Radius, Spacing } from "@/constants/theme";
 import { api, errorMessage } from "@/lib/api";
+import { formatDate } from "@/lib/format";
 
-type Props = { visible: boolean; onClose: () => void; onCreated: () => void };
+type Props = {
+  visible: boolean;
+  onClose: () => void;
+  onCreated: () => void;
+  /** Prefill from a scanned receipt. The user still has to tap Save — never auto-saved. */
+  receipt?: ReceiptScanResult | null;
+};
 
-export function AddExpenseSheet({ visible, onClose, onCreated }: Props) {
+const CONFIDENCE = {
+  high: { color: Colors.success, label: "High confidence", hint: "Looks right — give it a quick check." },
+  medium: { color: Colors.warning, label: "Medium confidence", hint: "Please double-check the amount and date." },
+  low: { color: Colors.danger, label: "Low confidence", hint: "The receipt was hard to read. Check every field." },
+} as const;
+
+/** The API only accepts "YYYY-MM-DD" or a full ISO datetime with Z/offset. */
+const STRICT_DATE = /^\d{4}-\d{2}-\d{2}(T\d{2}:\d{2}(:\d{2}(\.\d+)?)?(Z|[+-]\d{2}:?\d{2}))?$/;
+
+export function AddExpenseSheet({ visible, onClose, onCreated, receipt }: Props) {
   const insets = useSafeAreaInsets();
   const [amount, setAmount] = useState("");
   const [category, setCategory] = useState<Category>("Food");
@@ -27,14 +43,28 @@ export function AddExpenseSheet({ visible, onClose, onCreated }: Props) {
   const [note, setNote] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [date, setDate] = useState<string | undefined>(undefined);
 
   const reset = () => {
     setAmount("");
     setCategory("Food");
     setMerchant("");
     setNote("");
+    setDate(undefined);
     setError(null);
   };
+
+  // Each time the sheet opens with a scan result, prefill from its draft.
+  useEffect(() => {
+    if (!visible || !receipt) return;
+    const d = receipt.draft;
+    setAmount(d.amount != null ? String(d.amount) : "");
+    setCategory(d.category && (CATEGORIES as readonly string[]).includes(d.category) ? d.category : "Other");
+    setMerchant(d.merchant ?? "");
+    setNote(d.note ?? "");
+    setDate(d.date && STRICT_DATE.test(d.date) ? d.date : undefined);
+    setError(null);
+  }, [visible, receipt]);
 
   async function save() {
     setError(null);
@@ -43,7 +73,8 @@ export function AddExpenseSheet({ visible, onClose, onCreated }: Props) {
       category,
       merchant: merchant.trim() || undefined,
       note: note.trim() || undefined,
-      source: "manual",
+      date,
+      source: receipt ? "receipt" : "manual",
     });
     if (!parsed.success || !Number.isFinite(Number(amount.replace(/,/g, "")))) {
       setError("Enter an amount greater than 0.");
@@ -70,20 +101,38 @@ export function AddExpenseSheet({ visible, onClose, onCreated }: Props) {
           <View style={styles.handle} />
           <View style={styles.headerRow}>
             <Text style={styles.title} accessibilityRole="header">
-              Add expense
+              {receipt ? "Confirm receipt" : "Add expense"}
             </Text>
             <Pressable onPress={onClose} accessibilityRole="button" accessibilityLabel="Close" hitSlop={12} style={styles.close}>
               <Ionicons name="close" size={22} color={Colors.textDim} />
             </Pressable>
           </View>
           <ScrollView keyboardShouldPersistTaps="handled" contentContainerStyle={styles.body}>
+            {receipt && (
+              <View
+                style={[styles.badge, { borderColor: CONFIDENCE[receipt.confidence].color }]}
+                accessible
+                accessibilityLabel={`Scanned receipt, ${CONFIDENCE[receipt.confidence].label}. ${CONFIDENCE[receipt.confidence].hint}`}
+              >
+                <Ionicons name="scan-outline" size={16} color={CONFIDENCE[receipt.confidence].color} />
+                <View style={{ flex: 1 }}>
+                  <Text style={[styles.badgeTitle, { color: CONFIDENCE[receipt.confidence].color }]}>
+                    {CONFIDENCE[receipt.confidence].label}
+                  </Text>
+                  <Text style={styles.badgeHint}>
+                    {CONFIDENCE[receipt.confidence].hint}
+                    {date ? ` Dated ${formatDate(date)}.` : ""}
+                  </Text>
+                </View>
+              </View>
+            )}
             <TextField
               label="Amount (₹)"
               value={amount}
               onChangeText={setAmount}
               keyboardType="decimal-pad"
               placeholder="0.00"
-              autoFocus
+              autoFocus={!receipt}
               style={styles.amount}
             />
             <View style={{ gap: 6 }}>
@@ -150,4 +199,15 @@ const styles = StyleSheet.create({
     backgroundColor: Colors.surface,
   },
   catText: { color: Colors.textDim, ...Font.small, fontWeight: "600" },
+  badge: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: Spacing.sm,
+    borderWidth: 1,
+    borderRadius: Radius.md,
+    padding: Spacing.md,
+    backgroundColor: Colors.surface,
+  },
+  badgeTitle: { ...Font.small, fontWeight: "800" },
+  badgeHint: { color: Colors.textDim, ...Font.small },
 });

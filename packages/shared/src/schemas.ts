@@ -22,8 +22,24 @@ export const CATEGORIES = [
 export const CategorySchema = z.enum(CATEGORIES);
 export type Category = z.infer<typeof CategorySchema>;
 
-/** ISO date string, e.g. "2026-10-30" or full ISO datetime. */
-const isoDate = z.string().refine((s) => !Number.isNaN(Date.parse(s)), "Invalid date");
+const DATE_ONLY = /^(\d{4})-(\d{2})-(\d{2})$/;
+const DATE_TIME = /^(\d{4})-(\d{2})-(\d{2})T\d{2}:\d{2}(:\d{2}(\.\d{1,3})?)?(Z|[+-]\d{2}:\d{2})$/;
+
+/** True for a real calendar day ("2026-02-31" is rejected rather than rolled over). */
+function isRealDay(y: string, m: string, d: string) {
+  const dt = new Date(Date.UTC(+y, +m - 1, +d));
+  return dt.getUTCFullYear() === +y && dt.getUTCMonth() === +m - 1 && dt.getUTCDate() === +d;
+}
+
+/**
+ * "YYYY-MM-DD" (a calendar day, interpreted in the user's timezone) or a full ISO datetime with
+ * "Z" or an offset. Ambiguous forms like "10/30/2026" would parse in the server's timezone, so
+ * they are rejected.
+ */
+const isoDate = z.string().refine((s) => {
+  const m = DATE_ONLY.exec(s) ?? DATE_TIME.exec(s);
+  return !!m && isRealDay(m[1]!, m[2]!, m[3]!) && !Number.isNaN(Date.parse(s));
+}, "Invalid date: use YYYY-MM-DD or an ISO datetime with a timezone offset");
 
 // ---------- Users / Auth ----------
 
@@ -261,7 +277,7 @@ export type TranscribeInput = z.infer<typeof TranscribeSchema>;
 
 export const AgentRequestSchema = z.object({
   /** Transcribed user speech (speech-to-text happens on the device). */
-  message: z.string().min(1).max(2000),
+  message: z.string().trim().min(1).max(2000),
   conversationId: z.string().optional(),
   /** Client's IANA timezone, e.g. "Asia/Kolkata", so "today"/"this month" resolve correctly. */
   timezone: z.string().optional(),

@@ -9,7 +9,7 @@ export default function Home() {
   const { status } = useAuth();
   const router = useRouter();
   useEffect(() => {
-    if (status === "authed") router.replace("/assistant");
+    if (status === "authed") router.replace("/today");
     else if (status === "anon") router.replace("/login");
   }, [status, router]);
   return <FullScreenLoader />;

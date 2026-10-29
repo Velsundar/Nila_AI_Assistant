@@ -50,14 +50,25 @@ export type ApiClientOptions = {
 };
 
 /** Typed client for the Nova REST API. Shared by web (Next.js) and mobile (Expo). */
+/** The device's IANA timezone, so "today" and "this month" match the user's clock. */
+function deviceTimezone(): string | undefined {
+  try {
+    return Intl.DateTimeFormat().resolvedOptions().timeZone || undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 export function createApiClient({ baseUrl, getToken, onUnauthorized }: ApiClientOptions) {
   async function request<T>(method: string, path: string, body?: unknown): Promise<T> {
     const token = await getToken();
+    const tz = deviceTimezone();
     const res = await fetch(`${baseUrl}/api${path}`, {
       method,
       headers: {
         ...(body !== undefined ? { "Content-Type": "application/json" } : {}),
         ...(token ? { Authorization: `Bearer ${token}` } : {}),
+        ...(tz ? { "X-Timezone": tz } : {}),
       },
       body: body !== undefined ? JSON.stringify(body) : undefined,
     });

@@ -4,8 +4,16 @@
     "preview": {
       "distribution": "internal",
       "android": { "buildType": "apk" },
-      "env": { "EXPO_PUBLIC_API_URL": "http://192.168.1.10:4000" }
+      "env": {
+        "APP_VARIANT": "preview",
+        "EXPO_PUBLIC_API_URL": "http://YOUR-LAN-IP:4000"
+      }
     },
-    "production": {}
+    "production": {
+      "env": {
+        "APP_VARIANT": "production",
+        "EXPO_PUBLIC_API_URL": "https://YOUR-API.onrender.com"
+      }
+    }
   }
 }

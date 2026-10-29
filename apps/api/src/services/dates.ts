@@ -2,12 +2,47 @@
 
 export type ZonedParts = { year: number; month: number; day: number; hour: number; minute: number; second: number; weekday: number };
 
+/** Max cached formatters. Keys are canonical IANA names only, so this is a safety cap, not an LRU. */
+export const FMT_CACHE_MAX = 64;
 const fmtCache = new Map<string, Intl.DateTimeFormat>();
+
+/** Test hook. */
+export const fmtCacheSize = () => fmtCache.size;
+
+/**
+ * Canonical IANA name ("aSiA/kOlKaTa" -> "Asia/Kolkata"), or undefined if invalid. Intl accepts any
+ * casing, so caching by the raw string would let callers grow the cache without bound.
+ */
+export function canonicalTimezone(tz: string | undefined): string | undefined {
+  if (!tz || tz.length > 64) return undefined;
+  try {
+    const id = new Intl.DateTimeFormat("en-US", { timeZone: tz }).resolvedOptions().timeZone;
+    return MODERN_ZONE_NAMES[id] ?? id;
+  } catch {
+    return undefined;
+  }
+}
+
+/** ICU still canonicalises some zones to their legacy names; prefer the current IANA spelling. */
+const MODERN_ZONE_NAMES: Record<string, string> = {
+  "Asia/Calcutta": "Asia/Kolkata",
+  "Asia/Katmandu": "Asia/Kathmandu",
+  "Asia/Saigon": "Asia/Ho_Chi_Minh",
+  "Asia/Rangoon": "Asia/Yangon",
+  "Europe/Kiev": "Europe/Kyiv",
+  "Atlantic/Faeroe": "Atlantic/Faroe",
+  "America/Godthab": "America/Nuuk",
+};
+
 function fmt(tz: string) {
   let f = fmtCache.get(tz);
+  if (f) return f;
+  const canonical = canonicalTimezone(tz);
+  if (!canonical) throw new RangeError(`Invalid time zone: ${tz}`);
+  f = fmtCache.get(canonical);
   if (!f) {
     f = new Intl.DateTimeFormat("en-US", {
-      timeZone: tz,
+      timeZone: canonical,
       hourCycle: "h23",
       year: "numeric",
       month: "2-digit",
@@ -17,23 +52,19 @@ function fmt(tz: string) {
       second: "2-digit",
       weekday: "short",
     });
-    fmtCache.set(tz, f);
+    if (fmtCache.size >= FMT_CACHE_MAX) fmtCache.delete(fmtCache.keys().next().value!);
+    fmtCache.set(canonical, f);
   }
   return f;
 }
 
 export function isValidTimezone(tz: string | undefined): tz is string {
-  if (!tz) return false;
-  try {
-    new Intl.DateTimeFormat("en-US", { timeZone: tz });
-    return true;
-  } catch {
-    return false;
-  }
+  return canonicalTimezone(tz) !== undefined;
 }
 
+/** Always returns a canonical IANA name (safe to cache by and to pass to Mongo $dateToString). */
 export function resolveTimezone(tz: string | undefined, fallback = "Asia/Kolkata"): string {
-  return isValidTimezone(tz) ? tz : fallback;
+  return canonicalTimezone(tz) ?? canonicalTimezone(fallback) ?? "UTC";
 }
 
 const WD = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];

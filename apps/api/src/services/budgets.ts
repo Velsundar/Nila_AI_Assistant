@@ -5,6 +5,7 @@ import { ExpenseModel } from "../models/Expense";
 import { notFound } from "../errors";
 import { monthBounds } from "./dates";
 import { round2 } from "./serialize";
+import { money2 } from "./expenses";
 
 const oid = (id: string) => new Types.ObjectId(id);
 
@@ -47,7 +48,7 @@ export async function getBudgetStatus(userId: string, category: Category, tz: st
 export async function upsertBudget(userId: string, category: Category, monthlyLimit: number, tz: string): Promise<BudgetStatus> {
   await BudgetModel.findOneAndUpdate(
     { userId: oid(userId), category },
-    { $set: { monthlyLimit: round2(monthlyLimit) } },
+    { $set: { monthlyLimit: money2(monthlyLimit, "monthlyLimit") } },
     { upsert: true, new: true, setDefaultsOnInsert: true },
   );
   return (await getBudgetStatus(userId, category, tz))!;

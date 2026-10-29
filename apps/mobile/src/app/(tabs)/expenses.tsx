@@ -3,17 +3,20 @@ import { useFocusEffect } from "expo-router";
 import { useCallback, useRef, useState } from "react";
 import { ActivityIndicator, Alert, Pressable, RefreshControl, ScrollView, StyleSheet, Text, View } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
-import type { BudgetStatus, Expense, SpendingSummary } from "@nova/shared";
+import type { BudgetStatus, Expense, ReceiptScanResult, SpendingSummary, WeeklyReport } from "@nova/shared";
 
 import { AddExpenseSheet } from "@/components/AddExpenseSheet";
 import { Banner, Card, ProgressBar, SectionTitle } from "@/components/ui";
+import { WeeklyReportCard } from "@/components/WeeklyReportCard";
+import { useSpeaker } from "@/hooks/useSpeaker";
 import { CategoryMeta, Colors, Font, Radius, Spacing } from "@/constants/theme";
 import { api, errorMessage } from "@/lib/api";
 import { useAppState } from "@/lib/app-state";
 import { useAuth } from "@/lib/auth";
-import { formatDate, formatMoney, monthLabel } from "@/lib/format";
+import { deviceTimezone, formatDate, formatMoney, monthLabel } from "@/lib/format";
+import { pickReceiptImage } from "@/lib/receipt";
 
-type Data = { summary: SpendingSummary; budgets: BudgetStatus[]; expenses: Expense[] };
+type Data = { summary: SpendingSummary; budgets: BudgetStatus[]; expenses: Expense[]; report: WeeklyReport | null };
 
 function budgetColor(pct: number) {
   if (pct >= 100) return Colors.danger;
@@ -30,16 +33,23 @@ export default function ExpensesScreen() {
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [adding, setAdding] = useState(false);
+  const [receipt, setReceipt] = useState<ReceiptScanResult | null>(null);
+  const [sheetKey, setSheetKey] = useState(0);
+  const [scanning, setScanning] = useState(false);
   const loadedVersion = useRef<number | null>(null);
+  const speaker = useSpeaker();
 
   const load = useCallback(async () => {
     try {
-      const [summary, { budgets }, { expenses }] = await Promise.all([
+      // The weekly report is optional: an older API without it shouldn't break this screen.
+      const reportP = api.reports.weekly({ tz: deviceTimezone() }).catch(() => null);
+      const [summary, { budgets }, { expenses }, report] = await Promise.all([
         api.expenses.summary(),
         api.budgets.list(),
         api.expenses.list({ limit: 50 }),
+        reportP,
       ]);
-      setData({ summary, budgets, expenses });
+      setData({ summary, budgets, expenses, report });
       setError(null);
     } catch (e) {
       setError(errorMessage(e));
@@ -57,6 +67,39 @@ export default function ExpensesScreen() {
       }
     }, [dataVersion, load]),
   );
+
+  const stopSpeaker = speaker.stop;
+  useFocusEffect(useCallback(() => () => stopSpeaker(), [stopSpeaker]));
+
+  async function scan(source: "camera" | "library") {
+    setError(null);
+    try {
+      const image = await pickReceiptImage(source);
+      if (!image) return; // cancelled
+      setScanning(true);
+      const result = await api.receipts.scan({ image });
+      setReceipt(result);
+      setSheetKey((k) => k + 1);
+      setAdding(true);
+    } catch (e) {
+      setError(`Receipt scan failed: ${errorMessage(e)}`);
+    } finally {
+      setScanning(false);
+    }
+  }
+
+  const chooseScanSource = () =>
+    Alert.alert("Scan a receipt", "The amount, merchant and date are read for you to confirm. Nothing is saved until you tap Save.", [
+      { text: "Take photo", onPress: () => void scan("camera") },
+      { text: "Choose from library", onPress: () => void scan("library") },
+      { text: "Cancel", style: "cancel" },
+    ]);
+
+  const openManual = () => {
+    setReceipt(null);
+    setSheetKey((k) => k + 1);
+    setAdding(true);
+  };
 
   const onRefresh = async () => {
     setRefreshing(true);
@@ -94,9 +137,23 @@ export default function ExpensesScreen() {
         contentContainerStyle={styles.content}
         refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={Colors.primary} colors={[Colors.primary]} progressBackgroundColor={Colors.surface} />}
       >
-        <Text style={styles.title} accessibilityRole="header">
-          Expenses
-        </Text>
+        <View style={styles.rowBetween}>
+          <Text style={styles.title} accessibilityRole="header">
+            Expenses
+          </Text>
+          <Pressable
+            onPress={chooseScanSource}
+            disabled={scanning}
+            accessibilityRole="button"
+            accessibilityLabel="Scan a receipt"
+            accessibilityHint="Take or pick a photo of a receipt to prefill an expense"
+            accessibilityState={{ disabled: scanning, busy: scanning }}
+            style={({ pressed }) => [styles.scanBtn, (pressed || scanning) && { opacity: 0.7 }]}
+          >
+            {scanning ? <ActivityIndicator size="small" color={Colors.primary} /> : <Ionicons name="scan-outline" size={18} color={Colors.primary} />}
+            <Text style={styles.scanText}>{scanning ? "Reading…" : "Scan receipt"}</Text>
+          </Pressable>
+        </View>
 
         {error && <Banner tone="error" text={error} onDismiss={() => void onRefresh()} />}
 
@@ -113,6 +170,18 @@ export default function ExpensesScreen() {
                 {data.summary.count} expense{data.summary.count === 1 ? "" : "s"} this month
               </Text>
             </Card>
+
+            {data.report && (
+              <View>
+                <SectionTitle>Weekly report</SectionTitle>
+                <WeeklyReportCard
+                  report={data.report}
+                  currency={currency}
+                  speaking={speaker.speaking}
+                  onReadAloud={() => data.report && speaker.toggle(data.report.text)}
+                />
+              </View>
+            )}
 
             <View>
               <SectionTitle>By category</SectionTitle>
@@ -213,7 +282,7 @@ export default function ExpensesScreen() {
       </ScrollView>
 
       <Pressable
-        onPress={() => setAdding(true)}
+        onPress={openManual}
         accessibilityRole="button"
         accessibilityLabel="Add expense"
         style={({ pressed }) => [styles.fab, pressed && { transform: [{ scale: 0.95 }] }]}
@@ -221,7 +290,16 @@ export default function ExpensesScreen() {
         <Ionicons name="add" size={30} color={Colors.bg} />
       </Pressable>
 
-      <AddExpenseSheet visible={adding} onClose={() => setAdding(false)} onCreated={invalidateData} />
+      <AddExpenseSheet
+        key={sheetKey}
+        visible={adding}
+        receipt={receipt}
+        onClose={() => {
+          setAdding(false);
+          setReceipt(null);
+        }}
+        onCreated={invalidateData}
+      />
     </SafeAreaView>
   );
 }
@@ -252,6 +330,18 @@ const styles = StyleSheet.create({
   },
   itemIcon: { width: 38, height: 38, borderRadius: 19, alignItems: "center", justifyContent: "center" },
   itemTitle: { color: Colors.text, ...Font.body, fontWeight: "600" },
+  scanBtn: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+    minHeight: 40,
+    paddingHorizontal: Spacing.md,
+    borderRadius: 999,
+    borderWidth: 1,
+    borderColor: Colors.primaryDim,
+    backgroundColor: "rgba(56,189,248,0.08)",
+  },
+  scanText: { color: Colors.primary, ...Font.small, fontWeight: "700" },
   fab: {
     position: "absolute",
     right: Spacing.xl,

@@ -8,6 +8,12 @@ const userSchema = new Schema(
     passwordHash: { type: String, required: true },
     currency: { type: String, default: DEFAULT_CURRENCY },
     assistantName: { type: String, default: ASSISTANT_NAME },
+    /** Home city (display name from geocoding) plus coordinates for weather. */
+    city: { type: String, trim: true },
+    cityLat: { type: Number },
+    cityLon: { type: Number },
+    /** Embedded in JWTs as `tv`; incrementing it revokes every token issued before. */
+    tokenVersion: { type: Number, default: 0 },
   },
   { timestamps: true },
 );

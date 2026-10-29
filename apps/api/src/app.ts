@@ -10,6 +10,10 @@ import { expensesRouter } from "./routes/expenses";
 import { budgetsRouter } from "./routes/budgets";
 import { remindersRouter } from "./routes/reminders";
 import { agentRouter } from "./routes/agent";
+import { tasksRouter } from "./routes/tasks";
+import { notesRouter } from "./routes/notes";
+import { briefingRouter, reportsRouter } from "./routes/insights";
+import { receiptsRouter, transcribeRouter } from "./routes/media";
 import type { LlmClient } from "./agent/llm";
 
 export type AppOptions = {
@@ -19,10 +23,13 @@ export type AppOptions = {
   getLlm?: () => LlmClient;
 };
 
-function limiter(windowMs: number, limit: number) {
+function limiter(windowMs: number, limit: number, perUser = false) {
   return rateLimit({
     windowMs,
     limit,
+    // Per-user limits run after requireAuth, so one account can't spread its quota across IPs
+    // and users behind one NAT don't share a bucket.
+    ...(perUser ? { keyGenerator: (req: express.Request) => `u:${req.userId ?? req.ip}` } : {}),
     standardHeaders: "draft-7",
     legacyHeaders: false,
     handler: (_req, res) => {
@@ -50,9 +57,15 @@ export function createApp(opts: AppOptions = {}) {
       maxAge: 86400,
     }),
   );
-  app.use(express.json({ limit: "100kb" }));
-
   if (useLimits) app.use("/api", limiter(60_000, 300));
+
+  // Large-body routes: authenticate first, then parse with a route-specific limit. The global 100 kB
+  // parser below skips requests whose body was already parsed.
+  const mediaLimits = useLimits ? [limiter(60_000, 20, true)] : [];
+  app.use("/api/receipts", requireAuth, ...mediaLimits, express.json({ limit: "6mb" }), receiptsRouter);
+  app.use("/api/transcribe", requireAuth, ...mediaLimits, express.json({ limit: "14mb" }), transcribeRouter);
+
+  app.use(express.json({ limit: "100kb" }));
 
   app.get("/api/health", (_req, res) => {
     res.json({ ok: true });
@@ -62,7 +75,11 @@ export function createApp(opts: AppOptions = {}) {
   app.use("/api/expenses", requireAuth, expensesRouter);
   app.use("/api/budgets", requireAuth, budgetsRouter);
   app.use("/api/reminders", requireAuth, remindersRouter);
-  app.use("/api/agent", ...(useLimits ? [limiter(60_000, 20)] : []), requireAuth, agentRouter(opts.getLlm));
+  app.use("/api/tasks", requireAuth, tasksRouter);
+  app.use("/api/notes", requireAuth, notesRouter);
+  app.use("/api/briefing", requireAuth, briefingRouter);
+  app.use("/api/reports", requireAuth, reportsRouter);
+  app.use("/api/agent", requireAuth, ...(useLimits ? [limiter(60_000, 20, true)] : []), agentRouter(opts.getLlm));
 
   app.use((_req, _res, next) => next(new HttpError(404, "NOT_FOUND", "Route not found")));
   app.use(errorHandler);

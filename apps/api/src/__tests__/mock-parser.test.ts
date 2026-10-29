@@ -38,7 +38,7 @@ describe("mock parser", () => {
     ["change my last expense to 300", { tool: "updateExpense", args: { amount: 300 } }],
     ["remind me to pay rent on the 5th", { tool: "createReminder", args: { text: "pay rent", dateTime: "2026-11-05T09:00" } }],
     ["show my recent expenses", { tool: "listRecentExpenses", args: { limit: 5 } }],
-    ["remember that I am vegetarian", { tool: "rememberFact", args: { fact: "i am vegetarian" } }],
+    ["remember that I am vegetarian", { tool: "manageMemory", args: { action: "save", fact: "i am vegetarian" } }],
   ])("%s", (msg, expected) => {
     expect(plan(msg)).toEqual(expected);
   });

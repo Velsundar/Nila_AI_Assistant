@@ -32,7 +32,7 @@ export default function RegisterPage() {
     setBusy(true);
     try {
       await register(parsed.data);
-      router.replace("/assistant");
+      router.replace("/today");
     } catch (err) {
       const fe = fieldErrors(err);
       setErrors(fe);

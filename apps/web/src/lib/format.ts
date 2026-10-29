@@ -53,3 +53,45 @@ export function shortDate(iso: string) {
   if (Number.isNaN(d.getTime())) return iso;
   return d.toLocaleDateString("en-IN", { day: "numeric", month: "short" });
 }
+
+/** Local "YYYY-MM-DD" of an ISO string (or "" if invalid). */
+export function localDayOf(iso: string) {
+  const d = new Date(iso);
+  return Number.isNaN(d.getTime()) ? "" : dayKey(d);
+}
+
+/** "Today" / "Tomorrow" / "Yesterday" / "Overdue · 3 Oct" / "12 Nov" for a due date, plus its tone. */
+export function dueLabel(iso: string, now = new Date()): { label: string; tone: "overdue" | "today" | "soon" | "later" } {
+  const day = localDayOf(iso);
+  const today = dayKey(now);
+  const tomorrow = dayKey(new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1));
+  const yesterday = dayKey(new Date(now.getFullYear(), now.getMonth(), now.getDate() - 1));
+  if (!day) return { label: iso, tone: "later" };
+  if (day === today) return { label: "Today", tone: "today" };
+  if (day === tomorrow) return { label: "Tomorrow", tone: "soon" };
+  if (day < today) return { label: day === yesterday ? "Yesterday" : `Overdue · ${shortDate(iso)}`, tone: "overdue" };
+  return { label: shortDate(iso), tone: "later" };
+}
+
+export function timeOf(iso: string) {
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return "";
+  return d.toLocaleTimeString("en-IN", { hour: "numeric", minute: "2-digit" });
+}
+
+/** "19 Oct – 25 Oct" for two YYYY-MM-DD keys (parsed as local dates). */
+export function dayRangeLabel(from: string, to: string) {
+  const f = (k: string) => {
+    const [y, m, d] = k.split("-").map(Number);
+    return new Date(y, m - 1, d).toLocaleDateString("en-IN", { day: "numeric", month: "short" });
+  };
+  return `${f(from)} – ${f(to)}`;
+}
+
+export function timezone() {
+  try {
+    return Intl.DateTimeFormat().resolvedOptions().timeZone;
+  } catch {
+    return undefined;
+  }
+}

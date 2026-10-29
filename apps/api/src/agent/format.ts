@@ -40,6 +40,7 @@ export function sanitizeForSpeech(text: string): string {
     .replace(/\p{Extended_Pictographic}|️|‍/gu, "")
     .replace(/\bRs\.?\s?(?=\d)/gi, "₹")
     .replace(/\bINR\s?(?=\d)/g, "₹")
+    .replace(/([a-z][.!?])(?=[A-Z])/g, "$1 ") // "saved.Anything" -> "saved. Anything"
     .replace(/\s+/g, " ")
     .trim();
 }

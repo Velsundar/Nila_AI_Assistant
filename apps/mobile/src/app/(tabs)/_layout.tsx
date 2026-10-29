@@ -3,6 +3,7 @@ import { Tabs } from "expo-router/tabs";
 import type { ColorValue } from "react-native";
 
 import { Colors } from "@/constants/theme";
+import { useNotificationIntents } from "@/lib/notifications";
 
 type IconName = keyof typeof Ionicons.glyphMap;
 
@@ -13,6 +14,8 @@ const icon =
   );
 
 export default function TabsLayout() {
+  // Tapping the weekly-report notification opens the assistant and reads the report.
+  useNotificationIntents();
   return (
     <Tabs
       screenOptions={{
@@ -30,6 +33,14 @@ export default function TabsLayout() {
           title: "Assistant",
           tabBarAccessibilityLabel: "Assistant tab",
           tabBarIcon: icon("planet-outline", "planet"),
+        }}
+      />
+      <Tabs.Screen
+        name="today"
+        options={{
+          title: "Today",
+          tabBarAccessibilityLabel: "Today tab: briefing, tasks and notes",
+          tabBarIcon: icon("today-outline", "today"),
         }}
       />
       <Tabs.Screen

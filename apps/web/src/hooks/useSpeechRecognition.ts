@@ -5,9 +5,9 @@ import { useCallback, useEffect, useRef, useState } from "react";
 /* Minimal Web Speech API typings (not in TypeScript's DOM lib). */
 type SRAlternative = { transcript: string; confidence: number };
 type SRResult = { isFinal: boolean; length: number; [i: number]: SRAlternative };
-type SRResultEvent = Event & { resultIndex: number; results: { length: number; [i: number]: SRResult } };
-type SRErrorEvent = Event & { error: string; message?: string };
-interface SpeechRecognitionLike extends EventTarget {
+export type SRResultEvent = Event & { resultIndex: number; results: { length: number; [i: number]: SRResult } };
+export type SRErrorEvent = Event & { error: string; message?: string };
+export interface SpeechRecognitionLike extends EventTarget {
   lang: string;
   continuous: boolean;
   interimResults: boolean;
@@ -23,7 +23,7 @@ interface SpeechRecognitionLike extends EventTarget {
 }
 type SRConstructor = new () => SpeechRecognitionLike;
 
-function getCtor(): SRConstructor | null {
+export function getCtor(): SRConstructor | null {
   if (typeof window === "undefined") return null;
   const w = window as unknown as { SpeechRecognition?: SRConstructor; webkitSpeechRecognition?: SRConstructor };
   return w.SpeechRecognition ?? w.webkitSpeechRecognition ?? null;
@@ -66,7 +66,20 @@ export function useSpeechRecognition({ lang = "en-IN", onFinal, onSpeechStart, s
 
   useEffect(() => {
     setSupported(getCtor() !== null);
+    // Tab hidden mid-turn: drop the session (and its mic) rather than leave it dangling.
+    const onVis = () => {
+      if (document.visibilityState !== "hidden" || !recRef.current) return;
+      if (silenceTimer.current) clearTimeout(silenceTimer.current);
+      finalRef.current = interimRef.current = "";
+      try {
+        recRef.current.abort();
+      } catch {
+        /* ignore */
+      }
+    };
+    document.addEventListener("visibilitychange", onVis);
     return () => {
+      document.removeEventListener("visibilitychange", onVis);
       if (silenceTimer.current) clearTimeout(silenceTimer.current);
       const rec = recRef.current;
       if (rec) {
