@@ -1,0 +1,11 @@
+packages:
+  - apps/*
+  - packages/*
+
+# Expo / React Native needs a flat node_modules
+nodeLinker: hoisted
+
+onlyBuiltDependencies:
+  - esbuild
+  - sharp
+  - unrs-resolver

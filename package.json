@@ -1,0 +1,14 @@
+{
+  "name": "nova",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Voice-first expense tracker and personal AI assistant (web + mobile)",
+  "scripts": {
+    "dev:api": "pnpm --filter @nova/api dev",
+    "dev:web": "pnpm --filter @nova/web dev",
+    "dev:mobile": "pnpm --filter @nova/mobile start",
+    "typecheck": "pnpm -r typecheck",
+    "test": "pnpm -r test"
+  },
+  "engines": { "node": ">=20" }
+}
