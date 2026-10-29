@@ -1,0 +1,120 @@
+"use client";
+
+import { useCallback, useEffect, useRef, useState } from "react";
+
+export type SpeakOptions = { voiceURI?: string; rate?: number; lang?: string; onEnd?: () => void };
+
+/** Split long replies into sentence chunks: Chrome silently stops utterances after ~15s. */
+function chunk(text: string, max = 180): string[] {
+  const sentences = text.replace(/\s+/g, " ").match(/[^.!?।]+[.!?।]*\s*/g) ?? [text];
+  const out: string[] = [];
+  let cur = "";
+  for (const s of sentences) {
+    if ((cur + s).length > max && cur) {
+      out.push(cur.trim());
+      cur = "";
+    }
+    cur += s;
+  }
+  if (cur.trim()) out.push(cur.trim());
+  return out;
+}
+
+/** Strip things that sound bad when read aloud (markdown symbols, emoji). */
+function speakable(text: string) {
+  return text
+    .replace(/[*_`#>]+/g, "")
+    .replace(/\p{Extended_Pictographic}/gu, "")
+    .replace(/₹\s?/g, "₹")
+    .trim();
+}
+
+/** Browser text-to-speech via window.speechSynthesis (free, on-device or browser-provided voices). */
+export function useSpeechSynthesis() {
+  const [supported, setSupported] = useState<boolean | null>(null);
+  const [voices, setVoices] = useState<SpeechSynthesisVoice[]>([]);
+  const [speaking, setSpeaking] = useState(false);
+  // Keep references to queued utterances: Chrome can GC them and never fire onend.
+  const queueRef = useRef<SpeechSynthesisUtterance[]>([]);
+  const sessionRef = useRef(0);
+
+  useEffect(() => {
+    if (typeof window === "undefined" || !("speechSynthesis" in window)) {
+      setSupported(false);
+      return;
+    }
+    setSupported(true);
+    const synth = window.speechSynthesis;
+    const load = () => setVoices(synth.getVoices());
+    load();
+    synth.addEventListener?.("voiceschanged", load);
+    return () => {
+      synth.removeEventListener?.("voiceschanged", load);
+      synth.cancel();
+    };
+  }, []);
+
+  const cancel = useCallback(() => {
+    if (typeof window === "undefined" || !("speechSynthesis" in window)) return;
+    sessionRef.current++;
+    queueRef.current = [];
+    window.speechSynthesis.cancel();
+    setSpeaking(false);
+  }, []);
+
+  const speak = useCallback(
+    (text: string, opts: SpeakOptions = {}) => {
+      if (typeof window === "undefined" || !("speechSynthesis" in window)) {
+        opts.onEnd?.();
+        return;
+      }
+      const synth = window.speechSynthesis;
+      synth.cancel();
+      const session = ++sessionRef.current;
+      const parts = chunk(speakable(text));
+      if (!parts.length) {
+        opts.onEnd?.();
+        return;
+      }
+      const all = synth.getVoices();
+      const voice =
+        (opts.voiceURI && all.find((v) => v.voiceURI === opts.voiceURI)) ||
+        all.find((v) => v.lang === (opts.lang ?? "en-IN")) ||
+        all.find((v) => v.default) ||
+        null;
+
+      let finished = false;
+      const finish = () => {
+        if (finished || session !== sessionRef.current) return;
+        finished = true;
+        queueRef.current = [];
+        setSpeaking(false);
+        opts.onEnd?.();
+      };
+
+      const utterances = parts.map((p, i) => {
+        const u = new SpeechSynthesisUtterance(p);
+        if (voice) u.voice = voice;
+        u.lang = voice?.lang ?? opts.lang ?? "en-IN";
+        u.rate = opts.rate ?? 1;
+        u.onstart = () => session === sessionRef.current && setSpeaking(true);
+        u.onerror = () => finish();
+        if (i === parts.length - 1) u.onend = () => finish();
+        return u;
+      });
+      queueRef.current = utterances;
+      setSpeaking(true);
+      utterances.forEach((u) => synth.speak(u));
+      // Safari occasionally starts paused.
+      if (synth.paused) synth.resume();
+      // Safety net in case onend never fires (known Chrome/Safari bugs).
+      const budget = 4000 + parts.join(" ").length * 90;
+      setTimeout(() => {
+        if (!synth.speaking) finish();
+      }, budget);
+    },
+    [],
+  );
+
+  return { supported, voices, speaking, speak, cancel };
+}

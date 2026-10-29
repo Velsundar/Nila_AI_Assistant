@@ -1,0 +1,64 @@
+{
+  "expo": {
+    "name": "Nova",
+    "slug": "nova",
+    "version": "0.1.0",
+    "orientation": "portrait",
+    "icon": "./assets/icon.png",
+    "scheme": "nova",
+    "userInterfaceStyle": "dark",
+    "backgroundColor": "#05070D",
+    "ios": {
+      "supportsTablet": true,
+      "bundleIdentifier": "app.nova.mobile",
+      "infoPlist": {
+        "NSMicrophoneUsageDescription": "Nova listens to your voice so you can log expenses and ask questions hands-free.",
+        "NSSpeechRecognitionUsageDescription": "Nova uses on-device speech recognition to turn what you say into text.",
+        "NSAppTransportSecurity": {
+          "NSAllowsLocalNetworking": true
+        }
+      }
+    },
+    "android": {
+      "package": "app.nova.mobile",
+      "adaptiveIcon": {
+        "backgroundColor": "#05070D",
+        "foregroundImage": "./assets/android-icon-foreground.png",
+        "backgroundImage": "./assets/android-icon-background.png",
+        "monochromeImage": "./assets/android-icon-monochrome.png"
+      },
+      "permissions": [
+        "android.permission.RECORD_AUDIO"
+      ],
+      "predictiveBackGestureEnabled": false
+    },
+    "web": {
+      "favicon": "./assets/favicon.png"
+    },
+    "plugins": [
+      "expo-router",
+      "expo-secure-store",
+      [
+        "expo-speech-recognition",
+        {
+          "microphonePermission": "Nova listens to your voice so you can log expenses and ask questions hands-free.",
+          "speechRecognitionPermission": "Nova uses on-device speech recognition to turn what you say into text.",
+          "androidSpeechServicePackages": [
+            "com.google.android.googlequicksearchbox"
+          ]
+        }
+      ],
+      [
+        "expo-build-properties",
+        {
+          "android": {
+            "usesCleartextTraffic": true
+          }
+        }
+      ]
+    ],
+    "experiments": {
+      "typedRoutes": true
+    }
+  }
+}

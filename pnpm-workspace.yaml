@@ -5,7 +5,11 @@ packages:
 # Expo / React Native needs a flat node_modules
 nodeLinker: hoisted
 
-onlyBuiltDependencies:
-  - esbuild
-  - sharp
-  - unrs-resolver
+# pnpm 11: dependencies allowed to run install scripts
+allowBuilds:
+  esbuild: true
+  sharp: true
+  unrs-resolver: true
+
+minimumReleaseAgeExclude:
+  - expo-speech-recognition@58.0.1
