@@ -8,13 +8,51 @@ import { normalize } from "../hooks/wakeMatch";
 
 const words = (s: string) => normalize(s).replace(/'/g, "").split(" ").filter(Boolean);
 
-/** Share (0..1) of the heard words that also occur in what Nova is saying. */
+/** Edit distance of at most one (insert, delete or substitute). */
+function withinOneEdit(a: string, b: string): boolean {
+  if (Math.abs(a.length - b.length) > 1) return false;
+  let i = 0;
+  let j = 0;
+  let edits = 0;
+  while (i < a.length && j < b.length) {
+    if (a[i] === b[j]) {
+      i++;
+      j++;
+      continue;
+    }
+    if (++edits > 1) return false;
+    if (a.length > b.length) i++;
+    else if (b.length > a.length) j++;
+    else {
+      i++;
+      j++;
+    }
+  }
+  return edits + (a.length - i) + (b.length - j) <= 1;
+}
+
+/**
+ * The mic hears Nova through the speakers, so the recognizer garbles her words: "log any" →
+ * "login", "no" → "now", "expenses" → "ex", "tasks" → "task". Count a heard word as Nova's when
+ * it is a near-miss of a spoken word, not only an exact match.
+ */
+function soundsSaid(w: string, said: Set<string>): boolean {
+  if (said.has(w)) return true;
+  for (const s of said) {
+    const [short, long] = w.length <= s.length ? [w, s] : [s, w];
+    if (short.length >= 2 && long.startsWith(short)) return true;
+    if (long.length >= 3 && withinOneEdit(w, s)) return true;
+  }
+  return false;
+}
+
+/** Share (0..1) of the heard words that (nearly) match what Nova is saying. */
 export function echoOverlap(heard: string, spoken: string): number {
   const h = words(heard);
   if (!h.length) return 1;
   const said = new Set(words(spoken));
   let hit = 0;
-  for (const w of h) if (said.has(w)) hit++;
+  for (const w of h) if (soundsSaid(w, said)) hit++;
   return hit / h.length;
 }
 

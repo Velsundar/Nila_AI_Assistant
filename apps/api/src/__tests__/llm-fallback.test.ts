@@ -148,7 +148,19 @@ describe("token diet", () => {
     expect(byName.manageTask.properties.ids).toBeUndefined();
     expect(byName.manageNote.properties.noteId).toBeUndefined();
     expect(byName.manageTask.properties.action.enum).toEqual(["add", "list", "complete", "delete"]);
-    expect(json.length).toBeLessThan(5000);
+    expect(json.length).toBeLessThan(5500);
+  });
+
+  it("lets optional tool args be null so Groq doesn't reject the call", () => {
+    const params = TOOL_DEFINITIONS.find((t) => t.function.name === "getWeeklyReport")!.function.parameters as {
+      properties: Record<string, { type: unknown }>;
+    };
+    expect(params.properties.weekStart.type).toEqual(["string", "null"]);
+    const task = TOOL_DEFINITIONS.find((t) => t.function.name === "manageTask")!.function.parameters as {
+      properties: Record<string, { type: unknown; enum?: unknown[] }>;
+    };
+    expect(task.properties.action.type).toBe("string");
+    expect(task.properties.priority.enum).toContain(null);
   });
 
   it("truncates long tool results", () => {

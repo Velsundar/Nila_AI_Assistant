@@ -195,3 +195,26 @@ apps/web (Next.js)     apps/mobile (Expo)
 - Agents logged live progress to `docs/progress/{api,web,mobile}.md`.
 - Screenshots: `docs/screenshots/` (`v2-*`, `v3-*`).
 - The coordinator always re-ran typecheck and tests before each commit, scanned for the Groq key, and kept `.env.example` placeholder-only.
+
+## 2026-10-30 — Fix: "Sorry, my language service had a problem"
+
+- **Symptom:** "how did my spending go last week" often answered with the generic language-service error.
+- **Cause:** the model calls `getWeeklyReport` with `{"weekStart": null}`. Groq validates tool calls against the JSON schema server-side; optional args were typed `string` only, so Groq returned 400 `tool_use_failed`. The one built-in retry usually failed the same way, and `friendlyLlmError` mapped `bad_request` to the generic message. Reproduced live: 2 of 3 calls failed.
+- **Fix:** `jsonSchemaFor` (`apps/api/src/agent/tools.ts`) now marks every optional top-level arg as nullable (`["string","null"]`, with `null` added to enums). `stripNulls` already removes nulls before Zod, so tool behaviour is unchanged. This applies to every tool, not just the weekly report.
+- Tool JSON grew from ~4.9k to ~5.2k chars (~70 tokens per call); the token-diet test budget was raised to 5500. A new test covers nullable optionals.
+- Verified: 206/206 tests pass, typecheck clean, live Groq rerun 5/5 OK.
+
+## 2026-10-30 — Fix: Nova hears her own voice on web (barge-in echo)
+
+- **Symptom (first real-speaker test):** while Nova spoke, the mic picked up her voice. Nova stopped herself ("Stopped speaking") and answered the garbled echo, e.g. "you didn't login", "you love now EX", "help with your money task nurse reminders which show".
+- **Causes in the web echo filter (`apps/web/src/lib/echoFilter.ts`):**
+  1. LLM replies use curly apostrophes ("didn’t"). `normalize` turned them into `didn t` while Chrome's transcript gave `didnt`, so they never matched.
+  2. Exact word matching. The recognizer garbles speaker audio ("log any" → "login", "no" → "now", "expenses" → "ex").
+  3. It compared only the current and previous TTS chunk, but recognition lags playback.
+- **Fix:**
+  - `normalize` (`hooks/wakeMatch.ts`) maps curly apostrophes to `'`.
+  - A heard word now counts as echo if it is a prefix of, or within one edit of, a word Nova is saying.
+  - The barge-in matcher compares against the whole reply plus the current chunk.
+- Checked with a scratch script: the 4 real echo transcripts are now ignored, and 7 genuine interruptions still go through. Web typecheck is clean.
+- Not changed: mobile `lib/echo.ts` already handles curly apostrophes; fuzzy matching there is a possible follow-up.
+- **Still true:** speakers plus voice barge-in is inherently leaky. Headphones avoid it entirely, and Settings → interrupt by voice can be turned off (tapping the mic always works).

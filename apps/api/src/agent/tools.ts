@@ -605,6 +605,14 @@ function jsonSchemaFor(schema: ZodTypeAny, opts: { hide?: string[]; categoryEnum
   for (const h of opts.hide ?? []) delete props[h];
   // Categories are listed once in the system prompt and in addExpense; elsewhere the enum is redundant.
   if (!opts.categoryEnum && props.category?.enum) delete props.category.enum;
+  // Models often send null for an omitted optional, and Groq rejects the whole call ("tool_use_failed")
+  // if the schema doesn't allow it. Accept null here; stripNulls drops it before Zod validates.
+  const required = new Set((js.required as string[] | undefined) ?? []);
+  for (const [k, p] of Object.entries(props)) {
+    if (required.has(k) || typeof p.type !== "string") continue;
+    p.type = [p.type, "null"];
+    if (Array.isArray(p.enum)) p.enum = [...p.enum, null];
+  }
   return stripValidationKeywords(js) as Record<string, unknown>;
 }
 

@@ -419,9 +419,9 @@ export default function AssistantPage() {
     lang: prefs.lang,
     trailingMs: 1200,
     match: (heard) => {
-      // Compare with the chunk being spoken (and the one before), or the whole reply before the
-      // first chunk has started; the acks count as Nova's own words too.
-      const said = `${ttsRef.current.spokenRef.current || replyTextRef.current} ${INTERRUPT_ACKS.join(" ")}`;
+      // Compare with the whole reply (recognition lags playback by a chunk or more) plus the
+      // chunk being spoken; the acks count as Nova's own words too.
+      const said = `${replyTextRef.current} ${ttsRef.current.spokenRef.current} ${INTERRUPT_ACKS.join(" ")}`;
       return isLikelyEcho(heard, said) ? null : heard;
     },
     onCandidate: () => {

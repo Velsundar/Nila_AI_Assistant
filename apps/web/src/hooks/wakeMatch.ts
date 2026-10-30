@@ -9,6 +9,7 @@ export function normalize(s: string) {
     .toLowerCase()
     .normalize("NFKD")
     .replace(/[̀-ͯ]/g, "")
+    .replace(/[‘’ʼ`]/g, "'") // LLM text uses curly apostrophes ("didn’t"); speech transcripts don't
     .replace(/[^a-z0-9\s']/g, " ")
     .replace(/\s+/g, " ")
     .trim();
