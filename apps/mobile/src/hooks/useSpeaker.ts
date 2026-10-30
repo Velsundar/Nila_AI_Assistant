@@ -1,4 +1,5 @@
 import * as Speech from "expo-speech";
+import { speak as speakWithVoice } from "@/lib/tts";
 import { useCallback, useEffect, useState } from "react";
 
 /** Read-aloud toggle for cards (briefing, weekly report). Stops when the screen unmounts. */
@@ -18,7 +19,7 @@ export function useSpeaker(lang = "en-IN") {
       if (!text.trim()) return;
       void Speech.stop();
       setSpeaking(true);
-      Speech.speak(text, {
+      speakWithVoice(text, {
         language: lang,
         onDone: () => setSpeaking(false),
         onStopped: () => setSpeaking(false),

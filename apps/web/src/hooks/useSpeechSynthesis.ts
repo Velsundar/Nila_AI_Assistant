@@ -1,8 +1,17 @@
 "use client";
 
+import { pickVoice, type VoiceStyle } from "@nova/shared";
 import { useCallback, useEffect, useRef, useState } from "react";
 
-export type SpeakOptions = { voiceURI?: string; rate?: number; lang?: string; onEnd?: () => void };
+export type SpeakOptions = {
+  /** Exact voice chosen in Settings; wins over `style`. */
+  voiceURI?: string;
+  /** Used when no exact voice is chosen. */
+  style?: VoiceStyle;
+  rate?: number;
+  lang?: string;
+  onEnd?: () => void;
+};
 
 /** Split long replies into sentence chunks: Chrome silently stops utterances after ~15s. */
 function chunk(text: string, max = 180): string[] {
@@ -83,7 +92,11 @@ export function useSpeechSynthesis() {
       const all = synth.getVoices();
       const voice =
         (opts.voiceURI && all.find((v) => v.voiceURI === opts.voiceURI)) ||
-        all.find((v) => v.lang === (opts.lang ?? "en-IN")) ||
+        pickVoice(
+          all.map((v) => ({ id: v.voiceURI, name: v.name, lang: v.lang, voice: v })),
+          opts.style ?? "any",
+          opts.lang ?? "en-IN",
+        )?.voice ||
         all.find((v) => v.default) ||
         null;
 

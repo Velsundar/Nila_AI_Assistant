@@ -1,10 +1,13 @@
 "use client";
 
+import { DEFAULT_VOICE_STYLE, type VoiceStyle } from "@nova/shared";
 import { useCallback, useEffect, useState } from "react";
 
 export type VoicePrefs = {
   /** SpeechSynthesisVoice.voiceURI, or "" for the browser default. */
   voiceURI: string;
+  /** Female/male/any; picks a matching voice when voiceURI is "". */
+  voiceStyle: VoiceStyle;
   rate: number;
   /** Speak replies aloud. */
   speak: boolean;
@@ -17,7 +20,7 @@ export type VoicePrefs = {
 };
 
 const KEY = "nova.voicePrefs";
-export const DEFAULT_PREFS: VoicePrefs = { voiceURI: "", rate: 1, speak: true, lang: "en-IN", wakeWord: false, autoBriefing: false };
+export const DEFAULT_PREFS: VoicePrefs = { voiceURI: "", voiceStyle: DEFAULT_VOICE_STYLE, rate: 1, speak: true, lang: "en-IN", wakeWord: false, autoBriefing: false };
 const EVENT = "nova:prefs";
 
 /** Current prefs straight from localStorage (client only). */

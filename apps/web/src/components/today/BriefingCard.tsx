@@ -77,7 +77,7 @@ export function BriefingCard({ currency, className }: { currency: string; classN
             variant="secondary"
             disabled={tts.supported === false}
             aria-pressed={tts.speaking}
-            onClick={() => (tts.speaking ? tts.cancel() : tts.speak(b.text, { voiceURI: prefs.voiceURI, rate: prefs.rate, lang: prefs.lang }))}
+            onClick={() => (tts.speaking ? tts.cancel() : tts.speak(b.text, { voiceURI: prefs.voiceURI, style: prefs.voiceStyle, rate: prefs.rate, lang: prefs.lang }))}
           >
             <SpeakerIcon />
             {tts.speaking ? "Stop" : "Read aloud"}

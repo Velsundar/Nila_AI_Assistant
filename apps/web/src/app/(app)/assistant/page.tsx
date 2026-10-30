@@ -114,7 +114,7 @@ export default function AssistantPage() {
         setPending(res.pendingConfirmation?.summary ?? null);
         if (res.actions.some((a) => a.ok)) notifyDataChanged();
         const p = prefsRef.current;
-        if (p.speak && res.reply) tts.speak(res.reply, { voiceURI: p.voiceURI, rate: p.rate, lang: p.lang });
+        if (p.speak && res.reply) tts.speak(res.reply, { voiceURI: p.voiceURI, style: p.voiceStyle, rate: p.rate, lang: p.lang });
       } catch (err) {
         push({ role: "error", text: errorMessage(err) });
       } finally {
@@ -144,7 +144,7 @@ export default function AssistantPage() {
           }
         }
         const p = prefsRef.current;
-        if (p.speak && b.text) tts.speak(b.text, { voiceURI: p.voiceURI, rate: p.rate, lang: p.lang });
+        if (p.speak && b.text) tts.speak(b.text, { voiceURI: p.voiceURI, style: p.voiceStyle, rate: p.rate, lang: p.lang });
       } catch (err) {
         push({ role: "error", text: errorMessage(err) });
       } finally {

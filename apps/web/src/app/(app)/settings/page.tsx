@@ -1,6 +1,6 @@
 "use client";
 
-import { UpdateMeSchema } from "@nova/shared";
+import { guessVoiceGender, UpdateMeSchema, type VoiceStyle } from "@nova/shared";
 import { useEffect, useId, useMemo, useRef, useState, type FormEvent } from "react";
 import { useAuth } from "@/components/AuthProvider";
 import { Button, Card, Notice, SelectField, TextField } from "@/components/ui";
@@ -126,16 +126,29 @@ export default function SettingsPage() {
             <Notice tone="warn">This browser can&apos;t speak replies (no speechSynthesis). Replies will be shown as text.</Notice>
           ) : (
             <div className="grid gap-4">
+              <SelectField
+                label="Voice style"
+                value={prefs.voiceStyle}
+                onChange={(e) => setPrefs({ voiceStyle: e.target.value as VoiceStyle, voiceURI: "" })}
+                hint="Picks the best matching voice this browser has, preferring Indian English."
+              >
+                <option value="female">Female</option>
+                <option value="male">Male</option>
+                <option value="any">Browser default</option>
+              </SelectField>
               <div className="grid gap-3 sm:grid-cols-[1fr_auto] sm:items-end">
                 <SelectField label="Reply voice" value={prefs.voiceURI} onChange={(e) => setPrefs({ voiceURI: e.target.value })} hint={voices.length ? `${voices.length} voices available in this browser` : "Loading voices…"}>
-                  <option value="">Browser default</option>
-                  {voices.map((v) => (
-                    <option key={v.voiceURI} value={v.voiceURI}>
-                      {v.name} ({v.lang}){v.localService ? "" : " · online"}
-                    </option>
-                  ))}
+                  <option value="">Automatic (matches voice style)</option>
+                  {voices.map((v) => {
+                    const g = guessVoiceGender({ id: v.voiceURI, name: v.name });
+                    return (
+                      <option key={v.voiceURI} value={v.voiceURI}>
+                        {v.name} ({v.lang}){g ? ` · ${g}` : ""}{v.localService ? "" : " · online"}
+                      </option>
+                    );
+                  })}
                 </SelectField>
-                <Button variant="secondary" className="sm:mb-[1.4rem]" onClick={() => tts.speak(`Hi, I'm ${name}. You spent two hundred and fifty rupees on food today.`, { voiceURI: prefs.voiceURI, rate: prefs.rate, lang: prefs.lang })}>
+                <Button variant="secondary" className="sm:mb-[1.4rem]" onClick={() => tts.speak(`Hi, I'm ${name}. You spent two hundred and fifty rupees on food today.`, { voiceURI: prefs.voiceURI, style: prefs.voiceStyle, rate: prefs.rate, lang: prefs.lang })}>
                   {tts.speaking ? "Playing…" : "Preview"}
                 </Button>
               </div>

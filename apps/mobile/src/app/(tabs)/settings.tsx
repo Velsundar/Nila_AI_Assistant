@@ -2,9 +2,9 @@ import Constants from "expo-constants";
 import * as Speech from "expo-speech";
 import { isRunningInExpoGo } from "expo";
 import { useEffect, useState } from "react";
-import { Alert, ScrollView, StyleSheet, Switch, Text, View } from "react-native";
+import { Alert, Pressable, ScrollView, StyleSheet, Switch, Text, View } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
-import { ApiError, ASSISTANT_NAME, UpdateMeSchema } from "@nova/shared";
+import { ApiError, ASSISTANT_NAME, UpdateMeSchema, type VoiceStyle } from "@nova/shared";
 
 import { Banner, Button, Card, SectionTitle, TextField } from "@/components/ui";
 import { Colors, Font, Spacing } from "@/constants/theme";
@@ -13,6 +13,7 @@ import { API_BASE_URL, errorMessage } from "@/lib/api";
 import { useAppState } from "@/lib/app-state";
 import { useAuth } from "@/lib/auth";
 import { cancelWeeklyReport, nextWeeklyReportDate, scheduleWeeklyReport } from "@/lib/notifications";
+import { speak as speakWithVoice, useTtsVoice, voicesForStyle } from "@/lib/tts";
 
 export default function SettingsScreen() {
   const { user, updateMe, signOut } = useAuth();
@@ -29,6 +30,8 @@ export default function SettingsScreen() {
   const [name, setName] = useState(user?.assistantName ?? ASSISTANT_NAME);
   const [saving, setSaving] = useState(false);
   const [msg, setMsg] = useState<{ tone: "info" | "error"; text: string } | null>(null);
+  const tts = useTtsVoice();
+  const styleVoices = voicesForStyle(tts.voices, tts.style);
 
   useEffect(() => {
     if (user?.assistantName) setName(user.assistantName);
@@ -109,6 +112,11 @@ export default function SettingsScreen() {
     }
   }
 
+  const preview = (voice?: string) => {
+    void Speech.stop();
+    speakWithVoice(`Hi, I'm ${assistantName}. How can I help?`, voice ? { voice } : {});
+  };
+
   const logout = () =>
     Alert.alert("Log out?", "You'll need to sign in again.", [
       { text: "Cancel", style: "cancel" },
@@ -158,10 +166,45 @@ export default function SettingsScreen() {
                 thumbColor={Colors.text}
               />
             </View>
-            <Button title="Test voice" variant="secondary" onPress={() => {
-                void Speech.stop();
-                Speech.speak(`Hi, I'm ${user?.assistantName ?? ASSISTANT_NAME}. How can I help?`, { language: "en-IN" });
-              }} />
+            <View style={{ gap: Spacing.sm }}>
+              <Text style={styles.strong}>Voice</Text>
+              <View style={styles.chips} accessibilityRole="radiogroup">
+                {VOICE_STYLES.map(([value, label]) => (
+                  <Chip
+                    key={value}
+                    label={label}
+                    selected={tts.style === value}
+                    onPress={() => {
+                      tts.setStyle(value);
+                      preview();
+                    }}
+                  />
+                ))}
+              </View>
+              <Text style={styles.dim}>
+                {tts.current ? `Using ${voiceLabel(tts.current)}` : "Using your phone's default voice"}
+                {tts.style !== "any" && styleVoices.length === 0 && tts.voices.length > 0
+                  ? `. No ${tts.style} English voice found on this phone; you can download more voices in your phone's text-to-speech settings.`
+                  : ""}
+              </Text>
+            </View>
+            <View style={styles.buttonRow}>
+              <Button title="Test voice" variant="secondary" onPress={() => preview()} style={{ flex: 1 }} />
+              {styleVoices.length > 1 && (
+                <Button
+                  title="Next voice"
+                  variant="secondary"
+                  style={{ flex: 1 }}
+                  accessibilityHint="Switches to another voice of this style and plays a sample"
+                  onPress={() => {
+                    const i = styleVoices.findIndex((v) => v.identifier === tts.current?.identifier);
+                    const next = styleVoices[(i + 1) % styleVoices.length]!;
+                    tts.setVoiceId(next.identifier);
+                    preview(next.identifier);
+                  }}
+                />
+              )}
+            </View>
           </Card>
         </View>
 
@@ -242,6 +285,34 @@ export default function SettingsScreen() {
   );
 }
 
+const VOICE_STYLES: [VoiceStyle, string][] = [
+  ["female", "Female"],
+  ["male", "Male"],
+  ["any", "Phone default"],
+];
+
+/** "Veena (en-IN)"; Android names are ids like "en-in-x-ahp-local", so show the language and quality instead. */
+function voiceLabel(v: Speech.Voice) {
+  const quality = v.quality === Speech.VoiceQuality.Enhanced ? ", enhanced" : "";
+  return v.name === v.identifier && v.name.includes("-x-")
+    ? `${v.language} voice ${v.name.split("-x-")[1]?.split("-")[0] ?? ""}${quality}`
+    : `${v.name} (${v.language}${quality})`;
+}
+
+function Chip({ label, selected, onPress }: { label: string; selected: boolean; onPress: () => void }) {
+  return (
+    <Pressable
+      onPress={onPress}
+      accessibilityRole="radio"
+      accessibilityState={{ selected }}
+      accessibilityLabel={`${label} voice`}
+      style={[styles.chip, selected && styles.chipSelected]}
+    >
+      <Text style={[styles.chipText, selected && styles.chipTextSelected]}>{label}</Text>
+    </Pressable>
+  );
+}
+
 function wakeUnavailableReason() {
   return isRunningInExpoGo()
     ? "Needs a development build: continuous listening uses the phone's native speech recognizer, which isn't in Expo Go. Push-to-talk still works here."
@@ -299,4 +370,19 @@ const styles = StyleSheet.create({
   dim: { color: Colors.textDim, ...Font.small },
   switchRow: { flexDirection: "row", alignItems: "center", gap: Spacing.md },
   row: { flexDirection: "row", justifyContent: "space-between", gap: Spacing.md },
+  buttonRow: { flexDirection: "row", gap: Spacing.sm },
+  chips: { flexDirection: "row", flexWrap: "wrap", gap: Spacing.sm },
+  chip: {
+    paddingHorizontal: Spacing.md,
+    paddingVertical: Spacing.sm,
+    minHeight: 40,
+    justifyContent: "center",
+    borderRadius: 999,
+    borderWidth: 1,
+    borderColor: Colors.surfaceAlt,
+    backgroundColor: Colors.surface,
+  },
+  chipSelected: { borderColor: Colors.primary, backgroundColor: Colors.primary },
+  chipText: { color: Colors.textDim, ...Font.small, fontWeight: "600" },
+  chipTextSelected: { color: Colors.bg },
 });

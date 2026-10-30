@@ -9,6 +9,7 @@ import {
 } from "expo-audio";
 import { File } from "expo-file-system";
 import * as Speech from "expo-speech";
+import { speak as speakWithVoice } from "@/lib/tts";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { AppState, Platform } from "react-native";
 import { useSharedValue } from "react-native-reanimated";
@@ -543,7 +544,7 @@ export function useVoice({ onFinalTranscript, lang = "en-IN", wakeWord }: UseVoi
         setSpeaking(false);
         opts?.onDone?.();
       };
-      Speech.speak(text, {
+      speakWithVoice(text, {
         language: lang,
         rate: 1.0,
         pitch: 1.0,
