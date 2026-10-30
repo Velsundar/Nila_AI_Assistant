@@ -34,7 +34,7 @@ const STATE_LABEL: Record<OrbState, string> = {
 type Props = {
   state: OrbState;
   size: number;
-  /** Mic level 0..1 (only used while listening). */
+  /** Mic level 0..1 while listening; natural-voice output level while speaking (when metered). */
   volume?: SharedValue<number>;
 };
 
@@ -132,7 +132,8 @@ function OrbImpl({ state, size, volume }: Props) {
       case 2:
         return 0.94 + breathe.value * 0.02;
       case 3:
-        return 1 + pulse.value * 0.08;
+        // Natural voice with metering writes its output level into `volume`; otherwise the pulse.
+        return 1 + (vol.value > 0.02 ? smoothVol.value * 0.12 : pulse.value * 0.08);
       default:
         return 1 + breathe.value * 0.035;
     }

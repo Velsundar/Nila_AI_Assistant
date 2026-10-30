@@ -3,7 +3,7 @@
 import type { WeeklyReport } from "@nova/shared";
 import { useCallback, useEffect, useState } from "react";
 import { Button, Card, Spinner } from "@/components/ui";
-import { useSpeechSynthesis } from "@/hooks/useSpeechSynthesis";
+import { useSpeech } from "@/hooks/useSpeech";
 import { api, errorMessage } from "@/lib/api";
 import { cn } from "@/lib/cn";
 import { DATA_CHANGED_EVENT } from "@/lib/events";
@@ -15,7 +15,7 @@ export function WeeklyReportCard({ currency, className }: { currency: string; cl
   const [report, setReport] = useState<WeeklyReport | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
-  const tts = useSpeechSynthesis();
+  const tts = useSpeech();
   const [prefs] = useVoicePrefs();
 
   const load = useCallback(async () => {

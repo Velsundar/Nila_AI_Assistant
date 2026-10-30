@@ -19,6 +19,8 @@ export default function config(phase: string): NextConfig {
     );
   }
   return {
+    // A separate build dir (NEXT_DIST_DIR=.next-prod) lets a production build run beside `next dev`.
+    distDir: process.env.NEXT_DIST_DIR || ".next",
     reactStrictMode: true,
     poweredByHeader: false,
     transpilePackages: ["@nova/shared"],

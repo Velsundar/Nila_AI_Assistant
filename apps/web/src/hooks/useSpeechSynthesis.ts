@@ -2,6 +2,7 @@
 
 import { pickVoice, type VoiceStyle } from "@nova/shared";
 import { useCallback, useEffect, useRef, useState } from "react";
+import { speakable } from "@/lib/speechText";
 
 export type SpeakOptions = {
   /** Exact voice chosen in Settings; wins over `style`. */
@@ -11,6 +12,8 @@ export type SpeakOptions = {
   rate?: number;
   lang?: string;
   onEnd?: () => void;
+  /** Fired as each sentence chunk starts playing (used by the barge-in echo filter). */
+  onChunkStart?: (text: string) => void;
 };
 
 /** Split long replies into sentence chunks: Chrome silently stops utterances after ~15s. */
@@ -29,13 +32,18 @@ function chunk(text: string, max = 180): string[] {
   return out;
 }
 
-/** Strip things that sound bad when read aloud (markdown symbols, emoji). */
-function speakable(text: string) {
-  return text
-    .replace(/[*_`#>]+/g, "")
-    .replace(/\p{Extended_Pictographic}/gu, "")
-    .replace(/₹\s?/g, "₹")
-    .trim();
+function resolveVoice(opts: SpeakOptions): SpeechSynthesisVoice | null {
+  const all = window.speechSynthesis.getVoices();
+  return (
+    (opts.voiceURI && all.find((v) => v.voiceURI === opts.voiceURI)) ||
+    pickVoice(
+      all.map((v) => ({ id: v.voiceURI, name: v.name, lang: v.lang, voice: v })),
+      opts.style ?? "any",
+      opts.lang ?? "en-IN",
+    )?.voice ||
+    all.find((v) => v.default) ||
+    null
+  );
 }
 
 /** Browser text-to-speech via window.speechSynthesis (free, on-device or browser-provided voices). */
@@ -89,16 +97,7 @@ export function useSpeechSynthesis() {
         opts.onEnd?.();
         return;
       }
-      const all = synth.getVoices();
-      const voice =
-        (opts.voiceURI && all.find((v) => v.voiceURI === opts.voiceURI)) ||
-        pickVoice(
-          all.map((v) => ({ id: v.voiceURI, name: v.name, lang: v.lang, voice: v })),
-          opts.style ?? "any",
-          opts.lang ?? "en-IN",
-        )?.voice ||
-        all.find((v) => v.default) ||
-        null;
+      const voice = resolveVoice(opts);
 
       let finished = false;
       const finish = () => {
@@ -114,7 +113,11 @@ export function useSpeechSynthesis() {
         if (voice) u.voice = voice;
         u.lang = voice?.lang ?? opts.lang ?? "en-IN";
         u.rate = opts.rate ?? 1;
-        u.onstart = () => session === sessionRef.current && setSpeaking(true);
+        u.onstart = () => {
+          if (session !== sessionRef.current) return;
+          setSpeaking(true);
+          opts.onChunkStart?.(p);
+        };
         u.onerror = () => finish();
         if (i === parts.length - 1) u.onend = () => finish();
         return u;
@@ -134,5 +137,28 @@ export function useSpeechSynthesis() {
     [],
   );
 
-  return { supported, voices, speaking, speak, cancel };
+  /**
+   * A short one-off phrase (the interrupt acknowledgement) that never flips `speaking`, so it
+   * doesn't re-enter the speaking state or wake the barge-in listener. Cancels anything queued.
+   */
+  const speakQuiet = useCallback((text: string, opts: SpeakOptions = {}) => {
+    if (typeof window === "undefined" || !("speechSynthesis" in window)) return;
+    const synth = window.speechSynthesis;
+    sessionRef.current++;
+    queueRef.current = [];
+    if (safetyTimer.current) clearTimeout(safetyTimer.current);
+    synth.cancel();
+    setSpeaking(false);
+    const u = new SpeechSynthesisUtterance(text);
+    const voice = resolveVoice(opts);
+    if (voice) u.voice = voice;
+    u.lang = voice?.lang ?? opts.lang ?? "en-IN";
+    u.rate = Math.max(1, opts.rate ?? 1);
+    u.onend = u.onerror = () => opts.onEnd?.();
+    queueRef.current = [u];
+    synth.speak(u);
+    if (synth.paused) synth.resume();
+  }, []);
+
+  return { supported, voices, speaking, speak, speakQuiet, cancel };
 }

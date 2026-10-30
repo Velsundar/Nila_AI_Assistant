@@ -17,7 +17,9 @@ export function middleware(req: NextRequest) {
     "style-src 'self' 'unsafe-inline'",
     `connect-src 'self'${api ? ` ${api}` : ""}${dev ? " ws: wss:" : ""}`,
     "img-src 'self' data: blob:",
-    "media-src 'self' blob:",
+    // Natural-voice clips play from blob: URLs (decoded from the API's data:audio/wav). data: is
+    // allowed too so a clip can also be played straight from the API response if ever needed.
+    "media-src 'self' blob: data:",
     "font-src 'self'",
     "object-src 'none'",
     "base-uri 'self'",

@@ -43,6 +43,12 @@ pnpm --filter @nova/api dev         # http://localhost:4000 (tsx watch)
 | `STT_MODEL` | `whisper-large-v3-turbo` | Groq Whisper model for `POST /api/transcribe` |
 | `LLM_DAILY_CALL_LIMIT` | `200` | Provider calls per user per UTC day (agent LLM calls, receipt vision, Whisper). Over the limit, the agent says so and the REST routes return 429 `DAILY_LIMIT` |
 | `AGENT_DEADLINE_MS` | `45000` | One overall deadline per `/api/agent` request, covering every loop iteration, fallback and retry |
+| `TTS_MODEL` | `canopylabs/orpheus-v1-english` | Groq text-to-speech model for `/api/speak` (uses `LLM_API_KEY`; Groq only) |
+| `TTS_VOICE` | first female voice (`autumn`) | Default natural voice, used only if the model offers it |
+| `TTS_DAILY_CALL_LIMIT` | `300` | Natural-voice requests per user per UTC day, separate from `LLM_DAILY_CALL_LIMIT`. Cache hits are free. Over the limit: 429 `DAILY_LIMIT` |
+| `TTS_MAX_INPUT_CHARS` | `400` | Longest text sent to Groq in one request; longer text is split at sentence/clause boundaries and the WAVs joined |
+| `TTS_RATE_LIMIT_PER_MIN` | `60` | Per-user requests per minute to `/api/speak*` |
+| `TTS_TIMEOUT_MS` | `20000` | Deadline for one `/api/speak` request. Exceeded: 504 `TTS_TIMEOUT` |
 | `LLM_BASE_URL` | provider default | Points at any OpenAI-compatible endpoint |
 | `CORS_ORIGINS` | empty | Extra comma-separated origins. `http://localhost:3000` and `http://localhost:8081` are added only when `NODE_ENV` is not `production` |
 
@@ -130,13 +136,29 @@ Groq's free tier allows about **8,000 tokens per minute per model** (and 1,000 r
 
 Weather comes from Open-Meteo, which is free and needs no key. Forecasts are cached for 30 minutes per location and geocoding for 24 hours. Receipts and transcription authenticate *before* their larger body parsers run, and every other route keeps the 100 kB limit.
 
+## v3: natural voice (`/api/speak`)
+
+Server text-to-speech with Groq **Orpheus** (`canopylabs/orpheus-v1-english`, OpenAI-compatible `POST /audio/speech`, `response_format: "wav"`), in `src/services/speech.ts` and `src/routes/speak.ts`. Clients split replies into sentences, request them one at a time, and fall back to the device voice on any error.
+
+| Route | Notes |
+|---|---|
+| `GET /api/speak/voices` | Always 200 `NaturalVoicesResult`. Voices are **discovered at runtime**: a request with a deliberately invalid voice makes Groq answer `voice must be one of the following voices: [autumn diana hannah austin daniel troy]`, which is parsed. Success is cached for 1 hour, failure for 1 minute (so accepting the terms takes effect quickly). `available:false` with `reason` `NO_KEY` (mock/no key), `TERMS_REQUIRED` (`model_terms_required`) or `UNAVAILABLE` (anything else) |
+| `POST /api/speak` | `SpeakSchema` body → `{ audio: "data:audio/wav;base64,...", voice }`. An unknown voice returns 400 `VALIDATION_ERROR` (with the valid list in `details.voices`), no key or terms not accepted 503 `TTS_UNAVAILABLE` (`details.reason`), a Groq 429 returns 429 `TTS_RATE_LIMITED` with `details.retryAfter` (seconds) and `retryAfterMs`, the daily budget 429 `DAILY_LIMIT`, a timeout 504 `TTS_TIMEOUT`, and other upstream failures 502 `TTS_FAILED` |
+
+- **Voices (verified 2026-10-30):** female `autumn`, `diana`, `hannah`; male `austin`, `daniel`, `troy`. The default is `TTS_VOICE` if valid, else the first female voice, **`autumn`**.
+- **Audio:** WAV, 24 kHz, mono, 16-bit PCM (48 KB per second of speech, so a data URL is roughly 64 KB/s).
+- **Input length (probed 2026-10-30):** Groq enforces no hard limit (1,000 chars still returned 200, but the audio stopped after about 15 s), and repetitive text loops. Natural text came back verbatim through Whisper at 198 chars (14.4 s audio), 314 (21.6 s) and **379 chars (22.8 s, 1.09 MB)**, so the contract's 400-char cap fits in one request and `TTS_MAX_INPUT_CHARS` defaults to 400. Longer text (if the cap is raised) is split at sentence, then clause, then word boundaries, and the WAVs are joined with correct RIFF sizes.
+- **Cache:** an in-memory LRU keyed by voice + text (200 entries, 25 MB cap), shared across users. Repeated acks (`INTERRUPT_ACKS`) and briefings are free and don't count against the budget.
+- **Limits:** per-user `TTS_DAILY_CALL_LIMIT` (300, a separate `ttsCalls` counter on the Usage doc), a per-user 60/min limiter, and one 20 s deadline per request. After a Groq 429 the server fails fast with `TTS_RATE_LIMITED` until the reset passes, without calling Groq or spending budget.
+- **Free-tier reality:** the Groq account's own Orpheus limits (from `x-ratelimit-*`) are **100 requests/day** and **1,200 tokens/min, where a token is about one input character**, shared by all users. That account cap, not the per-user 300, is the real ceiling, which is why the server cache matters.
+
 ## Implementation notes
 
 - Every query is scoped to the authenticated user's `userId`. Another user's ids return 404, and a test covers this.
 - `GET /api/expenses/summary` and budget `spent` use aggregation pipelines (`$match` → `$facet`/`$group`), with `byDay` grouped in the user's timezone. The default range is the current calendar month.
 - A date-only string like `"2026-10-30"` is stored as noon local time, so it always lands on the right calendar day.
 - Not in the contract, but optional: an `X-Timezone` header or `?tz=` query param changes the timezone for REST range defaults. The default is `Asia/Kolkata`.
-- Rate limits: 300 requests/min across `/api`, 30 per 15 minutes on `/api/auth`, and 20/min each on `/api/agent` and receipts/transcribe. They are disabled under tests.
+- Rate limits: 300 requests/min across `/api`, 30 per 15 minutes on `/api/auth`, and 20/min each on `/api/agent` and receipts/transcribe, and 60/min per user on `/api/speak`. They are disabled under tests.
 - JWTs are HS256 (the algorithm is pinned on verify), expire after 7 days, and carry the user's `tokenVersion` (`tv`). `POST /api/auth/logout-all` bumps it, which revokes every existing token.
 - Agent, receipts and transcribe rate limits are keyed by user id and run after authentication. Each user also has a daily provider-call budget (`LLM_DAILY_CALL_LIMIT`) and each agent request has one overall deadline (`AGENT_DEADLINE_MS`).
 - Timezones from `?tz`, `X-Timezone` or the agent request are canonicalised (`aSiA/kOlKaTa` becomes `Asia/Kolkata`) before use. The formatter cache is keyed by canonical name and capped, and only canonical names reach MongoDB.

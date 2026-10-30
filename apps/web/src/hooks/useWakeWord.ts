@@ -20,6 +20,15 @@ export type UseWakeWordOptions = {
    * utterance ("" when the user only said "hey nova"). Recognition has already ended.
    */
   onWake: (command: string) => void;
+  /**
+   * Custom detector over the current utterance: return the command to act on, or null to keep
+   * waiting. Defaults to "Hey <name>" matching. The barge-in listener passes an echo filter here.
+   */
+  match?: (text: string) => string | null;
+  /** Called once per session as soon as `match` hits on an interim result (before the final one). */
+  onCandidate?: (text: string) => void;
+  /** Wait this long after the last interim result for the final one (ms). */
+  trailingMs?: number;
 };
 
 /** How long to wait after hearing "hey nova…" for the rest of the sentence before acting. */
@@ -30,7 +39,7 @@ const TRAILING_MS = 1300;
  * Runs only while `active` and the page is visible; restarts on `onend` because Chrome ends
  * continuous sessions on its own (after silence, ~60 s, or network hiccups), with backoff on errors.
  */
-export function useWakeWord({ active, assistantName, lang = "en-IN", onWake }: UseWakeWordOptions) {
+export function useWakeWord({ active, assistantName, lang = "en-IN", onWake, match, onCandidate, trailingMs = TRAILING_MS }: UseWakeWordOptions) {
   const [supported, setSupported] = useState<boolean | null>(null);
   const [visible, setVisible] = useState(true);
   const [status, setStatus] = useState<WakeWordStatus>("off");
@@ -41,8 +50,9 @@ export function useWakeWord({ active, assistantName, lang = "en-IN", onWake }: U
   const restartTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const trailingTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const firedRef = useRef<string | null>(null); // detected command waiting for onend
-  const cfg = useRef({ assistantName, lang, onWake });
-  cfg.current = { assistantName, lang, onWake };
+  const candidateRef = useRef(false); // onCandidate already fired this session
+  const cfg = useRef({ assistantName, lang, onWake, match, onCandidate, trailingMs });
+  cfg.current = { assistantName, lang, onWake, match, onCandidate, trailingMs };
 
   useEffect(() => {
     setSupported(getCtor() !== null);
@@ -82,6 +92,7 @@ export function useWakeWord({ active, assistantName, lang = "en-IN", onWake }: U
     rec.interimResults = true;
     rec.maxAlternatives = 1;
     firedRef.current = null;
+    candidateRef.current = false;
 
     const fire = (command: string) => {
       if (firedRef.current !== null) return;
@@ -107,12 +118,17 @@ export function useWakeWord({ active, assistantName, lang = "en-IN", onWake }: U
         text += e.results[i][0].transcript + " ";
         if (!e.results[i].isFinal) allFinal = false;
       }
-      const cmd = matchWakePhrase(text, cfg.current.assistantName);
+      const c = cfg.current;
+      const cmd = c.match ? c.match(text) : matchWakePhrase(text, c.assistantName);
       if (cmd === null) return;
+      if (!candidateRef.current) {
+        candidateRef.current = true;
+        c.onCandidate?.(cmd);
+      }
       if (allFinal) return fire(cmd);
       // Heard the wake phrase mid-sentence: give the rest of the command a moment to arrive.
       if (trailingTimer.current) clearTimeout(trailingTimer.current);
-      trailingTimer.current = setTimeout(() => fire(cmd), TRAILING_MS);
+      trailingTimer.current = setTimeout(() => fire(cmd), c.trailingMs);
     };
     rec.onerror = (e) => {
       if (e.error === "not-allowed" || e.error === "service-not-allowed") {

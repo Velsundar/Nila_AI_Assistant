@@ -17,10 +17,18 @@ export type VoicePrefs = {
   wakeWord: boolean;
   /** Speak the daily briefing the first time the assistant opens each day. */
   autoBriefing: boolean;
+  /** "device" = browser speechSynthesis (default); "natural" = server AI voice (Groq Orpheus), falls back to device. */
+  engine: VoiceEngine;
+  /** Natural voice id from GET /api/speak/voices, or "" for the server default. */
+  naturalVoice: string;
+  /** While Nova is speaking, keep listening so the user can interrupt by talking (Chrome/Edge). */
+  bargeIn: boolean;
 };
 
+export type VoiceEngine = "device" | "natural";
+
 const KEY = "nova.voicePrefs";
-export const DEFAULT_PREFS: VoicePrefs = { voiceURI: "", voiceStyle: DEFAULT_VOICE_STYLE, rate: 1, speak: true, lang: "en-IN", wakeWord: false, autoBriefing: false };
+export const DEFAULT_PREFS: VoicePrefs = { voiceURI: "", voiceStyle: DEFAULT_VOICE_STYLE, rate: 1, speak: true, lang: "en-IN", wakeWord: false, autoBriefing: false, engine: "device", naturalVoice: "", bargeIn: true };
 const EVENT = "nova:prefs";
 
 /** Current prefs straight from localStorage (client only). */

@@ -2,7 +2,7 @@ import Ionicons from "@expo/vector-icons/Ionicons";
 import * as Haptics from "expo-haptics";
 import { router, useFocusEffect } from "expo-router";
 import * as SecureStore from "expo-secure-store";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   KeyboardAvoidingView,
   Platform,
@@ -29,6 +29,9 @@ import { api, errorMessage } from "@/lib/api";
 import { useAppState } from "@/lib/app-state";
 import { useAuth } from "@/lib/auth";
 import { deviceTimezone, localISODate } from "@/lib/format";
+import { playAck, prepareNaturalVoice, stop as stopTts, useTtsNotice } from "@/lib/tts";
+import { createTurnController, type TurnHandlers } from "@/lib/turns";
+import { matchWakeWord } from "@/lib/wake";
 
 type Caption = {
   id: number;
@@ -36,6 +39,16 @@ type Caption = {
   text: string;
   actions?: AgentAction[];
   failed?: boolean;
+  /** "stopped": cut off mid-speech by an interruption. "superseded": arrived after the user asked something else (not spoken). */
+  marker?: "stopped" | "superseded";
+};
+
+type Job = { kind: "agent"; message: string } | { kind: "briefing" | "weeklyReport"; prompt: string };
+type JobResult = { text: string; actions: AgentAction[]; pendingConfirmation?: { summary: string }; conversationId?: string };
+
+const MARKER_TEXT: Record<NonNullable<Caption["marker"]>, string> = {
+  stopped: "Stopped speaking",
+  superseded: "Answered while you asked something else",
 };
 
 const STATUS: Record<OrbState, string> = {
@@ -61,7 +74,7 @@ const SUGGESTIONS = [
 
 export default function AssistantScreen() {
   const { user } = useAuth();
-  const { speakReplies, invalidateData, wakeWord, autoBriefing, pendingIntent, setPendingIntent } = useAppState();
+  const { speakReplies, invalidateData, wakeWord, voiceBargeIn, autoBriefing, pendingIntent, setPendingIntent } = useAppState();
   const assistantName = user?.assistantName || ASSISTANT_NAME;
   const { width, height } = useWindowDimensions();
   const orbSize = Math.round(Math.max(110, Math.min(width * 0.5, height * 0.24, 240)));
@@ -69,104 +82,221 @@ export default function AssistantScreen() {
   const [captions, setCaptions] = useState<Caption[]>([]);
   const [draft, setDraft] = useState("");
   const [sending, setSending] = useState(false);
+  /** Questions waiting behind the in-flight request (asked while Nova was thinking). */
+  const [queued, setQueued] = useState<string[]>([]);
   const [pending, setPending] = useState<{ summary: string } | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
+  const [ttsNotice, setTtsNotice] = useTtsNotice();
   const [focused, setFocused] = useState(false);
-  /** Synchronous guard: `sending` state is stale inside closures, so two quick taps could both send. */
-  const busyRef = useRef(false);
   const conversationId = useRef<string | undefined>(undefined);
   const nextId = useRef(1);
   const scrollRef = useRef<ScrollViewInstance>(null);
   const inputRef = useRef<TextInputInstance>(null);
-  const speakRef = useRef<(t: string) => void>(() => {});
+  const speakRef = useRef<(t: string, opts?: { onDone?: () => void }) => void>(() => {});
+  const speakRepliesRef = useRef(speakReplies);
+  speakRepliesRef.current = speakReplies;
+  const pendingRef = useRef(pending);
+  pendingRef.current = pending;
+  /** Caption Nova is reading aloud right now (gets a "Stopped speaking" marker if cut off). */
+  const speakingCaption = useRef<number | null>(null);
+  /** An ack is playing and listening starts when it ends. */
+  const ackThenListenPending = useRef(false);
+  /** Double-tap guard (the old busyRef only dropped; now repeats within 1.5 s are dropped and the rest queue). */
+  const lastSubmit = useRef<{ text: string; at: number }>({ text: "", at: 0 });
 
   useFocusEffect(
     useCallback(() => {
       setFocused(true);
+      // Natural voice selected → check it and cache the 4 ack clips so interruptions sound instant.
+      void prepareNaturalVoice();
       return () => setFocused(false);
     }, []),
   );
 
   const push = useCallback((c: Omit<Caption, "id">) => {
-    setCaptions((prev) => [...prev.slice(-49), { ...c, id: nextId.current++ }]);
+    const id = nextId.current++;
+    setCaptions((prev) => [...prev.slice(-49), { ...c, id }]);
+    return id;
   }, []);
 
-  const send = useCallback(
-    async (raw: string) => {
-      const message = raw.trim();
-      if (!message || busyRef.current) return;
-      busyRef.current = true;
+  const markCaption = useCallback((id: number, marker: NonNullable<Caption["marker"]>) => {
+    setCaptions((prev) => prev.map((c) => (c.id === id && !c.marker ? { ...c, marker } : c)));
+  }, []);
+
+  const speakCaption = useCallback((id: number, text: string) => {
+    speakingCaption.current = id;
+    speakRef.current(text, {
+      onDone: () => {
+        if (speakingCaption.current === id) speakingCaption.current = null;
+      },
+    });
+  }, []);
+
+  // ---------- Turns: strictly one request at a time, in order (lib/turns.ts) ----------
+  const turnHandlers = useRef<TurnHandlers<Job, JobResult>>(null!);
+  turnHandlers.current = {
+    run: async (job) => {
+      if (job.kind === "agent") {
+        const res = await api.agent.send({ message: job.message, conversationId: conversationId.current, timezone: deviceTimezone() });
+        return { text: res.reply, actions: res.actions ?? [], pendingConfirmation: res.pendingConfirmation, conversationId: res.conversationId };
+      }
+      const text =
+        job.kind === "briefing"
+          ? (await api.briefing.today({ tz: deviceTimezone() })).text
+          : (await api.reports.weekly({ tz: deviceTimezone() })).text;
+      return { text, actions: [{ tool: job.kind === "briefing" ? "getDailyBriefing" : "getWeeklyReport", args: {}, ok: true }] };
+    },
+    onStart: (job) => {
       setNotice(null);
       setPending(null);
-      push({ role: "user", text: message });
-      setSending(true);
-      try {
-        const res = await api.agent.send({
-          message,
-          conversationId: conversationId.current,
-          timezone: deviceTimezone(),
-        });
-        conversationId.current = res.conversationId;
-        push({ role: "assistant", text: res.reply, actions: res.actions });
-        setPending(res.pendingConfirmation ?? null);
-        if (res.actions?.some((a) => a.ok)) invalidateData();
-        if (speakReplies) speakRef.current(res.reply);
-      } catch (e) {
-        push({ role: "assistant", text: errorMessage(e), failed: true });
-      } finally {
-        busyRef.current = false;
-        setSending(false);
-      }
+      push({ role: "user", text: job.kind === "agent" ? job.message : job.prompt });
     },
-    [push, invalidateData, speakReplies],
+    onSettled: (job, outcome, { superseded }) => {
+      const marker = superseded ? ("superseded" as const) : undefined;
+      if (!outcome.ok) {
+        push({ role: "assistant", text: errorMessage(outcome.error), failed: true, marker });
+        return;
+      }
+      const r = outcome.value;
+      if (r.conversationId) conversationId.current = r.conversationId;
+      // Superseded answers are shown (with their chips) but not spoken: the user moved on.
+      const id = push({ role: "assistant", text: r.text, actions: r.actions, marker });
+      setPending(r.pendingConfirmation ?? null);
+      if (job.kind === "agent" && r.actions.some((a) => a.ok)) invalidateData();
+      // Briefings / reports are always read out; agent replies follow "Speak replies".
+      if (!superseded && (job.kind !== "agent" || speakRepliesRef.current)) speakCaption(id, r.text);
+    },
+    onChange: ({ busy, queued: q }) => {
+      setSending(busy);
+      setQueued(q.map((j) => (j.kind === "agent" ? j.message : j.prompt)));
+    },
+  };
+  const turns = useMemo(() => createTurnController<Job, JobResult>(() => turnHandlers.current), []);
+
+  const submit = useCallback(
+    (job: Job) => {
+      const text = job.kind === "agent" ? job.message : job.prompt;
+      const now = Date.now();
+      if (lastSubmit.current.text === text && now - lastSubmit.current.at < 1500) return;
+      lastSubmit.current = { text, at: now };
+      turns.submit(job);
+    },
+    [turns],
+  );
+
+  const send = useCallback(
+    (raw: string) => {
+      const message = raw.trim();
+      if (message) submit({ kind: "agent", message });
+    },
+    [submit],
   );
 
   /** Briefing / weekly report straight from REST (no agent, no AI tokens) and always spoken. */
   const readOut = useCallback(
-    async (kind: "briefing" | "weeklyReport", prompt: string) => {
-      if (busyRef.current) return;
-      busyRef.current = true;
-      setNotice(null);
-      push({ role: "user", text: prompt });
-      setSending(true);
-      try {
-        const text =
-          kind === "briefing"
-            ? (await api.briefing.today({ tz: deviceTimezone() })).text
-            : (await api.reports.weekly({ tz: deviceTimezone() })).text;
-        push({
-          role: "assistant",
-          text,
-          actions: [{ tool: kind === "briefing" ? "getDailyBriefing" : "getWeeklyReport", args: {}, ok: true }],
-        });
-        speakRef.current(text);
-      } catch (e) {
-        push({ role: "assistant", text: errorMessage(e), failed: true });
-      } finally {
-        busyRef.current = false;
-        setSending(false);
-      }
-    },
-    [push],
+    (kind: "briefing" | "weeklyReport", prompt: string) => submit({ kind, prompt }),
+    [submit],
   );
   const briefMe = useCallback(() => {
     void Haptics.selectionAsync().catch(() => {});
-    void readOut("briefing", "Brief me");
+    readOut("briefing", "Brief me");
   }, [readOut]);
 
+  const voiceRef = useRef<ReturnType<typeof useVoice>>(null!);
+
+  /** Stop all audio now; the caption being read keeps its full text plus a "Stopped speaking" marker. */
+  const haltSpeech = useCallback(() => {
+    ackThenListenPending.current = false;
+    voiceRef.current?.stopSpeaking();
+    stopTts();
+    const id = speakingCaption.current;
+    speakingCaption.current = null;
+    if (id !== null) markCaption(id, "stopped");
+  }, [markCaption]);
+
+  /** Short "Mm-hmm." and then listen for the new question. */
+  const ackThenListen = useCallback(() => {
+    ackThenListenPending.current = true;
+    let done = false;
+    const go = () => {
+      if (done) return;
+      done = true;
+      clearTimeout(timer);
+      if (!ackThenListenPending.current) return;
+      ackThenListenPending.current = false;
+      void voiceRef.current?.startListening();
+    };
+    const timer = setTimeout(go, 1500);
+    playAck(go);
+  }, []);
+
+  /**
+   * Interrupt by action (mic press/hold, orb tap) while Nova is speaking or thinking. Returns false
+   * when there was nothing to interrupt.
+   */
+  const interruptByAction = useCallback((): boolean => {
+    const v = voiceRef.current;
+    const thinking = turns.busy;
+    if (!v?.speaking && !thinking) return false;
+    void Haptics.selectionAsync().catch(() => {});
+    haltSpeech();
+    if (thinking) turns.interrupt(); // not cancelled: its answer is shown (unspoken) when it lands
+    // Nova was asking a yes/no confirmation: only stop the audio; the buttons stay.
+    if (pendingRef.current && !thinking) return true;
+    if (!v?.available) {
+      playAck();
+      inputRef.current?.focus();
+      return true;
+    }
+    ackThenListen();
+    return true;
+  }, [turns, haltSpeech, ackThenListen]);
+
+  /** Interrupt by voice (barge-in): the transcript is already echo-filtered. */
+  const interruptByVoice = useCallback(
+    (text: string) => {
+      let q = text;
+      if (wakeWord) {
+        const m = matchWakeWord(text, assistantName);
+        if (m.matched && m.command.length < 2) {
+          // Just "Hey Nova": stop and listen.
+          haltSpeech();
+          void Haptics.selectionAsync().catch(() => {});
+          ackThenListen();
+          return;
+        }
+        if (m.matched) q = m.command;
+      }
+      void Haptics.selectionAsync().catch(() => {});
+      haltSpeech();
+      if (turns.busy) turns.interrupt();
+      // During a confirmation question the words are the answer ("yes"/"no"): no ack.
+      if (!pendingRef.current) playAck();
+      send(q);
+    },
+    [wakeWord, assistantName, haltSpeech, ackThenListen, turns, send],
+  );
+
   const voice = useVoice({
-    onFinalTranscript: (text) => void send(text),
+    onFinalTranscript: (text) => send(text),
     wakeWord: {
       enabled: wakeWord,
       active: focused && !sending,
       name: assistantName,
       onCommand: (cmd) => {
         void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success).catch(() => {});
-        void send(cmd);
+        send(cmd);
       },
       onWake: () => void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success).catch(() => {}),
     },
+    bargeIn: {
+      enabled: voiceBargeIn,
+      active: focused,
+      onHeard: haltSpeech,
+      onInterrupt: interruptByVoice,
+    },
   });
+  voiceRef.current = voice;
   speakRef.current = voice.speak;
 
   const orbState: OrbState = voice.listening
@@ -181,7 +311,7 @@ export default function AssistantScreen() {
   useEffect(() => {
     if (!pendingIntent || !focused) return;
     setPendingIntent(null);
-    void readOut(pendingIntent.kind, pendingIntent.kind === "weeklyReport" ? "Read my weekly report" : "Brief me");
+    readOut(pendingIntent.kind, pendingIntent.kind === "weeklyReport" ? "Read my weekly report" : "Brief me");
   }, [pendingIntent, focused, setPendingIntent, readOut]);
 
   // Optional auto-briefing: once per day, the first time the assistant is opened.
@@ -193,7 +323,7 @@ export default function AssistantScreen() {
       const last = await SecureStore.getItemAsync(LAST_AUTO_BRIEFING_KEY).catch(() => null);
       if (cancelled || last === today) return;
       await SecureStore.setItemAsync(LAST_AUTO_BRIEFING_KEY, today).catch(() => {});
-      if (!cancelled) void readOut("briefing", "Good morning — brief me");
+      if (!cancelled) readOut("briefing", "Good morning — brief me");
     })();
     return () => {
       cancelled = true;
@@ -201,6 +331,14 @@ export default function AssistantScreen() {
   }, [autoBriefing, focused, readOut]);
 
   const startTalking = useCallback(async () => {
+    // Second press while the ack plays: skip the rest of it and listen now.
+    if (ackThenListenPending.current) {
+      ackThenListenPending.current = false;
+      stopTts();
+      await voice.startListening();
+      return;
+    }
+    if (interruptByAction()) return;
     void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium).catch(() => {});
     if (!voice.available) {
       setNotice("Voice input isn't available right now. Type your message below instead.");
@@ -208,18 +346,30 @@ export default function AssistantScreen() {
       return;
     }
     await voice.startListening();
-  }, [voice]);
+  }, [voice, interruptByAction]);
 
   const stopTalking = useCallback(() => {
+    // Released a hold before the ack finished: nothing was said yet, don't start listening.
+    if (ackThenListenPending.current) {
+      ackThenListenPending.current = false;
+      return;
+    }
     void Haptics.selectionAsync().catch(() => {});
     voice.stopListening();
   }, [voice]);
 
+  const onOrbPress = () => {
+    if (voice.listening) stopTalking();
+    else void startTalking();
+  };
+
   const submitDraft = () => {
     const text = draft;
+    if (!text.trim()) return;
     setDraft("");
-    voice.stopSpeaking();
-    void send(text);
+    haltSpeech();
+    if (turns.busy) turns.interrupt();
+    send(text);
   };
 
   const onActionPress = (a: AgentAction) => {
@@ -230,12 +380,13 @@ export default function AssistantScreen() {
   const statusText = voice.transcribing ? "Transcribing…" : orbState === "idle" && voice.wakeListening ? `Say "Hey ${assistantName}"` : STATUS[orbState];
   const hint =
     voice.mode === "native"
-      ? `Tap the mic to talk · hold for push-to-talk${wakeWord ? ` · or say "Hey ${assistantName}"` : ""}`
+      ? `Tap the mic to talk · hold for push-to-talk${wakeWord ? ` · or say "Hey ${assistantName}"` : ""}${voiceBargeIn ? " · talk over me to interrupt" : ""}`
       : voice.mode === "server"
         ? "Hold the mic to talk (or tap to start, tap to send)"
         : "Text mode — voice input is unavailable";
+  const interruptHint = orbState === "speaking" || orbState === "thinking" ? "Tap the orb or mic to interrupt" : null;
 
-  const banner = voice.error ?? notice;
+  const banner = voice.error ?? notice ?? ttsNotice;
 
   return (
     <SafeAreaView style={styles.safe} edges={["top"]}>
@@ -282,14 +433,28 @@ export default function AssistantScreen() {
         </View>
 
         <View style={styles.orbArea}>
-          <Orb state={orbState} size={orbSize} volume={voice.volume} />
+          <Pressable
+            onPress={onOrbPress}
+            accessibilityRole="button"
+            accessibilityLabel={
+              orbState === "speaking" || orbState === "thinking"
+                ? `Interrupt ${assistantName} and ask something else`
+                : orbState === "listening"
+                  ? "Stop listening and send"
+                  : `Talk to ${assistantName}`
+            }
+          >
+            <Orb state={orbState} size={orbSize} volume={voice.volume} />
+          </Pressable>
           <Text style={styles.interim} numberOfLines={3} accessibilityLiveRegion="polite">
             {voice.listening
               ? voice.interim || (voice.mode === "server" ? "Recording… release to send" : "Go ahead, I'm listening…")
               : voice.transcribing
                 ? "Transcribing…"
                 : sending
-                  ? "…"
+                  ? queued.length
+                    ? `Next: “${queued[queued.length - 1]}”${queued.length > 1 ? ` (+${queued.length - 1})` : ""}`
+                    : "…"
                   : captions.length === 0
                     ? `Ask me anything — expenses, tasks, notes, reminders, weather.`
                     : ""}
@@ -310,6 +475,16 @@ export default function AssistantScreen() {
               <Text style={[styles.captionText, c.failed && { color: Colors.danger }]} selectable>
                 {c.text}
               </Text>
+              {c.marker && (
+                <View style={styles.marker} accessible accessibilityLabel={MARKER_TEXT[c.marker]}>
+                  <Ionicons
+                    name={c.marker === "stopped" ? "volume-mute-outline" : "return-down-forward-outline"}
+                    size={12}
+                    color={Colors.textFaint}
+                  />
+                  <Text style={styles.markerText}>{MARKER_TEXT[c.marker]}</Text>
+                </View>
+              )}
               {!!c.actions?.length && (
                 <View style={styles.chips}>
                   {c.actions.map((a, i) => {
@@ -348,7 +523,7 @@ export default function AssistantScreen() {
             {SUGGESTIONS.map((sg) => (
               <Pressable
                 key={sg}
-                onPress={() => (sg === "Brief me on my day" ? briefMe() : void send(sg))}
+                onPress={() => (sg === "Brief me on my day" ? briefMe() : send(sg))}
                 disabled={sending}
                 accessibilityRole="button"
                 accessibilityLabel={`Suggestion: ${sg}`}
@@ -367,7 +542,7 @@ export default function AssistantScreen() {
             <View style={styles.confirmRow}>
               <Pressable
                 style={[styles.confirmBtn, styles.noBtn]}
-                onPress={() => void send("no")}
+                onPress={() => send("no")}
                 accessibilityRole="button"
                 accessibilityLabel="No, cancel"
               >
@@ -375,7 +550,7 @@ export default function AssistantScreen() {
               </Pressable>
               <Pressable
                 style={[styles.confirmBtn, styles.yesBtn]}
-                onPress={() => void send("yes")}
+                onPress={() => send("yes")}
                 accessibilityRole="button"
                 accessibilityLabel={`Yes, ${pending.summary}`}
               >
@@ -393,6 +568,7 @@ export default function AssistantScreen() {
               onDismiss={() => {
                 voice.clearError();
                 setNotice(null);
+                setTtsNotice(null);
               }}
             />
           </View>
@@ -416,11 +592,11 @@ export default function AssistantScreen() {
             />
             <Pressable
               onPress={submitDraft}
-              disabled={!draft.trim() || sending}
+              disabled={!draft.trim()}
               accessibilityRole="button"
-              accessibilityLabel="Send message"
-              accessibilityState={{ disabled: !draft.trim() || sending }}
-              style={[styles.sendBtn, (!draft.trim() || sending) && { opacity: 0.4 }]}
+              accessibilityLabel={sending ? "Send message (after the current answer)" : "Send message"}
+              accessibilityState={{ disabled: !draft.trim() }}
+              style={[styles.sendBtn, !draft.trim() && { opacity: 0.4 }]}
               hitSlop={6}
             >
               <Ionicons name="arrow-up" size={20} color={Colors.bg} />
@@ -429,14 +605,14 @@ export default function AssistantScreen() {
           <MicButton
             listening={voice.listening}
             unavailable={!voice.available}
-            disabled={sending || voice.transcribing}
+            disabled={voice.transcribing}
             volume={voice.volume}
             size={Math.min(72, Math.max(60, width * 0.17))}
             onStart={() => void startTalking()}
             onStop={stopTalking}
           />
         </View>
-        <Text style={styles.hint}>{hint}</Text>
+        <Text style={styles.hint}>{interruptHint ?? hint}</Text>
       </KeyboardAvoidingView>
     </SafeAreaView>
   );
@@ -508,6 +684,8 @@ const styles = StyleSheet.create({
   botCaption: { alignSelf: "flex-start", backgroundColor: Colors.surface, borderWidth: 1, borderColor: Colors.border },
   captionRole: { color: Colors.textDim, fontSize: 11, fontWeight: "700", marginBottom: 2 },
   captionText: { color: Colors.text, ...Font.body, lineHeight: 21 },
+  marker: { flexDirection: "row", alignItems: "center", gap: 4, marginTop: 4 },
+  markerText: { color: Colors.textFaint, fontSize: 11, fontStyle: "italic" },
   chips: { flexDirection: "row", flexWrap: "wrap", gap: 6, marginTop: Spacing.sm },
   chip: {
     flexDirection: "row",

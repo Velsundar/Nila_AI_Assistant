@@ -14,6 +14,7 @@ import { tasksRouter } from "./routes/tasks";
 import { notesRouter } from "./routes/notes";
 import { briefingRouter, reportsRouter } from "./routes/insights";
 import { receiptsRouter, transcribeRouter } from "./routes/media";
+import { speakRouter } from "./routes/speak";
 import type { LlmClient } from "./agent/llm";
 
 export type AppOptions = {
@@ -21,6 +22,8 @@ export type AppOptions = {
   rateLimit?: boolean;
   /** Override the LLM client (tests). */
   getLlm?: () => LlmClient;
+  /** Per-user requests per minute to /api/speak* (default TTS_RATE_LIMIT_PER_MIN, 60). */
+  speakPerMinute?: number;
 };
 
 function limiter(windowMs: number, limit: number, perUser = false) {
@@ -79,6 +82,7 @@ export function createApp(opts: AppOptions = {}) {
   app.use("/api/notes", requireAuth, notesRouter);
   app.use("/api/briefing", requireAuth, briefingRouter);
   app.use("/api/reports", requireAuth, reportsRouter);
+  app.use("/api/speak", requireAuth, ...(useLimits ? [limiter(60_000, opts.speakPerMinute ?? config.tts.ratePerMinute, true)] : []), speakRouter);
   app.use("/api/agent", requireAuth, ...(useLimits ? [limiter(60_000, 20, true)] : []), agentRouter(opts.getLlm));
 
   app.use((_req, _res, next) => next(new HttpError(404, "NOT_FOUND", "Route not found")));

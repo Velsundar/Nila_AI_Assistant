@@ -81,6 +81,20 @@ export const config = {
     /** Overall deadline for one /api/agent request across iterations, fallbacks and retries. */
     agentDeadlineMs: positiveInt(process.env.AGENT_DEADLINE_MS, 45_000),
   },
+  /** Natural voice (Groq Orpheus text-to-speech). Uses the Groq LLM_API_KEY. */
+  tts: {
+    model: process.env.TTS_MODEL?.trim() || "canopylabs/orpheus-v1-english",
+    /** Preferred default voice; used only if the model actually offers it. */
+    voice: process.env.TTS_VOICE?.trim() || undefined,
+    /** Natural-voice requests per user per UTC day (cache hits are free). Separate from LLM_DAILY_CALL_LIMIT. */
+    dailyCallLimit: positiveInt(process.env.TTS_DAILY_CALL_LIMIT, 300),
+    /** Longest input sent to Groq in one request; longer text is split and the WAVs joined. */
+    maxInputChars: positiveInt(process.env.TTS_MAX_INPUT_CHARS, 400),
+    /** Per-user requests per minute to /api/speak*. */
+    ratePerMinute: positiveInt(process.env.TTS_RATE_LIMIT_PER_MIN, 60),
+    /** Deadline for one /api/speak request (discovery + all chunks). */
+    timeoutMs: positiveInt(process.env.TTS_TIMEOUT_MS, 20_000),
+  },
   defaultTimezone: "Asia/Kolkata",
 };
 

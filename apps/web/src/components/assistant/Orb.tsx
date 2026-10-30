@@ -24,7 +24,18 @@ const wave = (th: number, t: number) => Math.sin(3 * th + t * 2.1) * 0.5 + Math.
  * The assistant's "robot orb": a canvas-rendered glowing core with a face, whose look blends
  * smoothly between four states. `levelRef` is live mic loudness (0..1) for the listening state.
  */
-export function Orb({ state, levelRef, label }: { state: OrbState; levelRef: MutableRefObject<number>; label: string }) {
+export function Orb({
+  state,
+  levelRef,
+  speakLevelRef,
+  label,
+}: {
+  state: OrbState;
+  levelRef: MutableRefObject<number>;
+  /** Real playback loudness (0..1) while speaking, or -1 when unknown (device TTS isn't tappable). */
+  speakLevelRef?: MutableRefObject<number>;
+  label: string;
+}) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const stateRef = useRef(state);
   stateRef.current = state;
@@ -56,6 +67,7 @@ export function Orb({ state, levelRef, label }: { state: OrbState; levelRef: Mut
     const weight: Record<OrbState, number> = { idle: 1, listening: 0, thinking: 0, speaking: 0 };
     let color = { a: [...PALETTE.idle.a] as RGB, b: [...PALETTE.idle.b] as RGB };
     let level = 0;
+    let spk = 0;
     let t = 0;
     let last = performance.now();
     let nextBlink = 2.5;
@@ -76,8 +88,13 @@ export function Orb({ state, levelRef, label }: { state: OrbState; levelRef: Mut
       color = { a: mixRGB(color.a, target.a, ct), b: mixRGB(color.b, target.b, ct) };
       level = lerp(level, levelRef.current, 0.35);
 
-      // Synthetic speech envelope for the speaking state (TTS audio isn't tappable).
-      const talk = weight.speaking * (0.45 + 0.35 * Math.sin(t * 9.3) * Math.sin(t * 3.1 + 1) + 0.2 * Math.sin(t * 17));
+      // Speaking: follow the real audio level when we have one (natural voice), else a synthetic
+      // envelope (device TTS audio isn't tappable).
+      const real = speakLevelRef?.current ?? -1;
+      if (real >= 0) spk = lerp(spk, real, 0.4);
+      const talk =
+        weight.speaking *
+        (real >= 0 ? Math.min(1, 0.12 + spk * 1.15) : 0.45 + 0.35 * Math.sin(t * 9.3) * Math.sin(t * 3.1 + 1) + 0.2 * Math.sin(t * 17));
       const listen = weight.listening * level;
 
       ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
@@ -273,7 +290,7 @@ export function Orb({ state, levelRef, label }: { state: OrbState; levelRef: Mut
       cancelAnimationFrame(raf);
       ro.disconnect();
     };
-  }, [levelRef]);
+  }, [levelRef, speakLevelRef]);
 
   return <canvas ref={canvasRef} role="img" aria-label={label} className="block size-full" />;
 }

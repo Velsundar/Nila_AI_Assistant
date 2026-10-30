@@ -1,15 +1,25 @@
-import * as Speech from "expo-speech";
-import { speak as speakWithVoice } from "@/lib/tts";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 
-/** Read-aloud toggle for cards (briefing, weekly report). Stops when the screen unmounts. */
+import { speak as speakWithVoice, stop as stopSpeech } from "@/lib/tts";
+
+/**
+ * Read-aloud toggle for cards (briefing, weekly report). Uses whichever engine the user picked
+ * (phone or natural voice). Stops when the screen unmounts.
+ */
 export function useSpeaker(lang = "en-IN") {
   const [speaking, setSpeaking] = useState(false);
+  const mine = useRef(false);
 
-  useEffect(() => () => void Speech.stop(), []);
+  useEffect(
+    () => () => {
+      if (mine.current) stopSpeech();
+    },
+    [],
+  );
 
   const stop = useCallback(() => {
-    void Speech.stop();
+    if (mine.current) stopSpeech();
+    mine.current = false;
     setSpeaking(false);
   }, []);
 
@@ -17,14 +27,13 @@ export function useSpeaker(lang = "en-IN") {
     (text: string) => {
       if (speaking) return stop();
       if (!text.trim()) return;
-      void Speech.stop();
+      const end = () => {
+        mine.current = false;
+        setSpeaking(false);
+      };
+      speakWithVoice(text, { language: lang, onDone: end, onStopped: end, onError: end });
+      mine.current = true;
       setSpeaking(true);
-      speakWithVoice(text, {
-        language: lang,
-        onDone: () => setSpeaking(false),
-        onStopped: () => setSpeaking(false),
-        onError: () => setSpeaking(false),
-      });
     },
     [speaking, stop, lang],
   );

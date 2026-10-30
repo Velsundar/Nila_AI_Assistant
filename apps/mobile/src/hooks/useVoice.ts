@@ -8,14 +8,15 @@ import {
   type RecordingOptions,
 } from "expo-audio";
 import { File } from "expo-file-system";
-import * as Speech from "expo-speech";
-import { speak as speakWithVoice } from "@/lib/tts";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { AppState, Platform } from "react-native";
 import { useSharedValue } from "react-native-reanimated";
 import { ApiError } from "@nova/shared";
 
 import { api, errorMessage } from "@/lib/api";
+import { checkEcho, looksLikeUser } from "@/lib/echo";
+import { setPlaybackKeepsMic } from "@/lib/natural-voice";
+import { getSpokenText, setSpeakingLevelSink, speak as speakWithVoice, stop as stopTts } from "@/lib/tts";
 import { matchWakeWord } from "@/lib/wake";
 
 /**
@@ -29,7 +30,11 @@ import { matchWakeWord } from "@/lib/wake";
  *     503 STT_UNAVAILABLE we drop to text mode with a notice.
  *  3. "none": text input only.
  *
- * Text-to-speech: `expo-speech` (works everywhere).
+ * Text-to-speech: lib/tts.ts (phone voice via expo-speech, or the optional natural voice).
+ *
+ * Voice barge-in (optional, native recognizer only): while Nova speaks, short recognition
+ * sessions keep running (same machinery as the wake word). Text that mostly matches what Nova is
+ * saying is ignored (lib/echo.ts); real speech stops Nova and is handed to `bargeIn.onInterrupt`.
  *
  * Wake word ("Hey <name>"): optional, native recognizer only (continuous listening isn't
  * possible over the server path). Runs short recognition sessions back-to-back while `active`,
@@ -137,16 +142,38 @@ export type WakeWordOptions = {
   onWake?: () => void;
 };
 
+export type BargeInOptions = {
+  /** User setting. */
+  enabled: boolean;
+  /** The screen wants it (focused). */
+  active: boolean;
+  /** Clear user speech detected (interim): the screen should stop Nova now. */
+  onHeard?: () => void;
+  /** Final transcript of the interruption (echo already filtered out). */
+  onInterrupt: (text: string) => void;
+};
+
 export type UseVoiceOptions = {
   /** Called once per utterance with the final transcript (not called if cancelled or empty). */
   onFinalTranscript: (text: string) => void;
   lang?: string;
   wakeWord?: WakeWordOptions;
+  bargeIn?: BargeInOptions;
 };
 
-type SessionKind = "ptt" | "wake" | null;
+type SessionKind = "ptt" | "wake" | "barge" | null;
 
-export function useVoice({ onFinalTranscript, lang = "en-IN", wakeWord }: UseVoiceOptions) {
+/**
+ * iOS: keep playback on the loudspeaker while recognising, and turn on voice processing (echo
+ * cancellation; it may lower playback volume a little). Android has no AEC switch in
+ * expo-speech-recognition, so there the echo filter does the work.
+ */
+const BARGE_IOS: Pick<import("expo-speech-recognition").ExpoSpeechRecognitionOptions, "iosCategory" | "iosVoiceProcessingEnabled"> = {
+  iosCategory: { category: "playAndRecord", categoryOptions: ["defaultToSpeaker", "allowBluetooth"], mode: "default" },
+  iosVoiceProcessingEnabled: true,
+};
+
+export function useVoice({ onFinalTranscript, lang = "en-IN", wakeWord, bargeIn }: UseVoiceOptions) {
   const [recognizer] = useState(getRecognizer);
   const [mode, setMode] = useState<VoiceMode>(getVoiceMode);
   const [listening, setListening] = useState(false);
@@ -166,6 +193,15 @@ export function useVoice({ onFinalTranscript, lang = "en-IN", wakeWord }: UseVoi
   onFinalRef.current = onFinalTranscript;
   const wakeRef = useRef(wakeWord);
   wakeRef.current = wakeWord;
+  const bargeRef = useRef(bargeIn);
+  bargeRef.current = bargeIn;
+  /** What Nova was saying during this barge session (TTS may already be stopped when the final arrives). */
+  const bargeSpoken = useRef<string[]>([]);
+  const bargeHeard = useRef(false);
+  const bargeResult = useRef("");
+  const bargeStartedAt = useRef(0);
+  const bargeFailures = useRef(0);
+  const [bargeTick, setBargeTick] = useState(0);
   const finalTextRef = useRef("");
   const latestTextRef = useRef("");
   const cancelledRef = useRef(false);
@@ -230,6 +266,20 @@ export function useVoice({ onFinalTranscript, lang = "en-IN", wakeWord }: UseVoi
     on("result", (ev: { isFinal: boolean; results: { transcript: string }[] }) => {
       const text = ev.results?.[0]?.transcript?.trim() ?? "";
       if (!text) return;
+      if (sessionRef.current === "barge") {
+        const now = getSpokenText();
+        if (now.length) bargeSpoken.current = [...new Set([...bargeSpoken.current, ...now])];
+        if (!ev.isFinal) {
+          if (!bargeHeard.current && looksLikeUser(text, bargeSpoken.current)) {
+            bargeHeard.current = true;
+            bargeRef.current?.onHeard?.();
+          }
+          return;
+        }
+        const v = checkEcho(text, bargeSpoken.current);
+        if (!v.echo) bargeResult.current = v.question;
+        return;
+      }
       if (sessionRef.current === "wake") {
         if (!ev.isFinal) {
           // Cheap early exit: as soon as the bare wake word is heard, keep listening for the command
@@ -261,7 +311,7 @@ export function useVoice({ onFinalTranscript, lang = "en-IN", wakeWord }: UseVoi
       volume.value = Math.min(1, Math.max(0, ev.value / 10));
     });
     on("error", (ev: { error: string; message: string }) => {
-      if (sessionRef.current === "wake" || BENIGN_ERRORS.has(ev.error)) return;
+      if (sessionRef.current === "wake" || sessionRef.current === "barge" || BENIGN_ERRORS.has(ev.error)) return;
       if (ev.error === "not-allowed") setError("Microphone / speech permission was denied. Enable it in Settings.");
       else if (ev.error === "network") setError("Speech recognition needs a connection on this device. Try again or type.");
       else if (ev.error === "language-not-supported") setError(`Speech recognition doesn't support ${lang} here.`);
@@ -270,6 +320,17 @@ export function useVoice({ onFinalTranscript, lang = "en-IN", wakeWord }: UseVoi
     on("end", () => {
       const kind = sessionRef.current;
       sessionRef.current = null;
+      if (kind === "barge") {
+        const q = bargeResult.current.trim();
+        bargeResult.current = "";
+        bargeHeard.current = false;
+        bargeSpoken.current = [];
+        if (Date.now() - bargeStartedAt.current < 1000) bargeFailures.current = Math.min(bargeFailures.current + 1, 5);
+        else bargeFailures.current = 0;
+        if (q) bargeRef.current?.onInterrupt(q);
+        setBargeTick((n) => n + 1); // loop while Nova is still speaking
+        return;
+      }
       if (kind === "wake") {
         setWakeListening(false);
         // Sessions that die instantly (busy recognizer, no service) back off exponentially.
@@ -303,6 +364,8 @@ export function useVoice({ onFinalTranscript, lang = "en-IN", wakeWord }: UseVoi
       }
       // The "end" listener is gone, so reset here or startListening would think a session is still live.
       sessionRef.current = null;
+      bargeHeard.current = false;
+      bargeResult.current = "";
       startPttAfterWake.current = false;
       finalTextRef.current = "";
       latestTextRef.current = "";
@@ -434,10 +497,19 @@ export function useVoice({ onFinalTranscript, lang = "en-IN", wakeWord }: UseVoi
   );
 
   // Stop any speech when the screen using the hook unmounts.
-  useEffect(() => () => void Speech.stop(), []);
+  useEffect(() => () => stopTts(), []);
 
+  // The natural player's output level (when it exposes samples) drives the orb while speaking.
+  useEffect(() => {
+    setSpeakingLevelSink((v) => {
+      volume.value = v;
+    });
+    return () => setSpeakingLevelSink(null);
+  }, [volume]);
+
+  /** Halts all speech now (phone voice and the natural-voice queue). */
   const stopSpeaking = useCallback(() => {
-    void Speech.stop();
+    stopTts();
     setSpeaking(false);
   }, []);
 
@@ -466,8 +538,10 @@ export function useVoice({ onFinalTranscript, lang = "en-IN", wakeWord }: UseVoi
       return false;
     }
     if (sessionRef.current === "ptt") return true;
-    if (sessionRef.current === "wake") {
-      // Hand the mic over from the wake listener to a real turn.
+    if (sessionRef.current === "wake" || sessionRef.current === "barge") {
+      // Hand the mic over from the wake / barge-in listener to a real turn.
+      bargeHeard.current = false;
+      bargeResult.current = "";
       try {
         recognizer.abort();
       } catch {}
@@ -538,8 +612,6 @@ export function useVoice({ onFinalTranscript, lang = "en-IN", wakeWord }: UseVoi
   const speak = useCallback(
     (text: string, opts?: { onDone?: () => void }) => {
       if (!text.trim()) return;
-      void Speech.stop();
-      setSpeaking(true);
       const done = () => {
         setSpeaking(false);
         opts?.onDone?.();
@@ -553,6 +625,7 @@ export function useVoice({ onFinalTranscript, lang = "en-IN", wakeWord }: UseVoi
         onStopped: () => setSpeaking(false),
         onError: () => setSpeaking(false),
       });
+      setSpeaking(true);
     },
     [lang],
   );
@@ -602,7 +675,63 @@ export function useVoice({ onFinalTranscript, lang = "en-IN", wakeWord }: UseVoi
       cancelled = true;
       clearTimeout(t);
     };
-  }, [recognizer, wakeWanted, wakeName, lang, wakeTick, abortWake, ensureNativePermission]);
+  }, [recognizer, wakeWanted, wakeName, lang, wakeTick, bargeTick, abortWake, ensureNativePermission]);
+
+  // ---------- Voice barge-in loop (while Nova speaks) ----------
+  const bargeWanted =
+    !!bargeIn?.enabled && bargeIn.active && appActive && mode === "native" && speaking && !listening && !transcribing;
+  const bargeConfigured = !!bargeIn?.enabled && !!bargeIn.active && mode === "native";
+
+  // Natural-voice playback uses playAndRecord while barge-in may run, so starting the recognizer
+  // mid-reply doesn't switch the iOS route to the earpiece or restart the player.
+  useEffect(() => {
+    setPlaybackKeepsMic(bargeConfigured);
+    return () => setPlaybackKeepsMic(false);
+  }, [bargeConfigured]);
+
+  useEffect(() => {
+    if (!recognizer) return;
+    if (!bargeWanted) {
+      // Nova stopped talking: end the session, unless the user is mid-sentence (let it finish).
+      if (sessionRef.current === "barge" && !bargeHeard.current) {
+        try {
+          recognizer.abort();
+        } catch {}
+      }
+      return;
+    }
+    if (sessionRef.current) return; // wake session still winding down, or one already running
+    let cancelled = false;
+    const delay = Math.min(3000, 120 * 2 ** bargeFailures.current);
+    const t = setTimeout(async () => {
+      if (cancelled || sessionRef.current) return;
+      if (!(await ensureNativePermission())) return;
+      if (cancelled || sessionRef.current) return;
+      try {
+        sessionRef.current = "barge";
+        bargeStartedAt.current = Date.now();
+        bargeHeard.current = false;
+        bargeResult.current = "";
+        bargeSpoken.current = getSpokenText();
+        recognizer.start({
+          lang,
+          interimResults: true,
+          continuous: false,
+          addsPunctuation: false,
+          maxAlternatives: 1,
+          ...(Platform.OS === "ios" ? BARGE_IOS : {}),
+        });
+      } catch {
+        sessionRef.current = null;
+        bargeFailures.current = Math.min(bargeFailures.current + 1, 5);
+        setBargeTick((n) => n + 1);
+      }
+    }, delay);
+    return () => {
+      cancelled = true;
+      clearTimeout(t);
+    };
+  }, [recognizer, bargeWanted, lang, bargeTick, wakeTick, ensureNativePermission]);
 
   // Stop it immediately on blur/background (the effect above also aborts, this is belt and braces).
   useEffect(() => {
@@ -626,6 +755,8 @@ export function useVoice({ onFinalTranscript, lang = "en-IN", wakeWord }: UseVoi
     clearError,
     /** Wake-word listener is running. */
     wakeListening,
+    /** True when voice barge-in can work on this device (native recognizer). */
+    bargeInSupported: mode === "native",
     startListening,
     stopListening,
     cancelListening,

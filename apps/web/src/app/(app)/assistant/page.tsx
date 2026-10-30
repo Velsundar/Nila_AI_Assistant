@@ -1,6 +1,6 @@
 "use client";
 
-import { ApiError, type AgentAction, type Expense } from "@nova/shared";
+import { ApiError, INTERRUPT_ACKS, type AgentAction, type Expense } from "@nova/shared";
 import Link from "next/link";
 import { useCallback, useEffect, useId, useRef, useState, type FormEvent } from "react";
 import { ACTION_ICON, actionKind, describeAction } from "@/components/assistant/actions";
@@ -11,21 +11,35 @@ import { FileButton, useReceiptScan, type ScanOutcome } from "@/components/expen
 import { useAudioRecorder } from "@/hooks/useAudioRecorder";
 import { useMicLevel } from "@/hooks/useMicLevel";
 import { useSpeechRecognition, type RecognitionError } from "@/hooks/useSpeechRecognition";
-import { useSpeechSynthesis } from "@/hooks/useSpeechSynthesis";
+import { useSpeech } from "@/hooks/useSpeech";
 import { useWakeWord } from "@/hooks/useWakeWord";
 import { api, errorMessage } from "@/lib/api";
 import { cn } from "@/lib/cn";
 import { notifyDataChanged } from "@/lib/events";
 import { dayKey, formatMoney, timezone } from "@/lib/format";
+import { isLikelyEcho, stripAck } from "@/lib/echoFilter";
 import { blobToDataUrl } from "@/lib/image";
+import { loadNaturalVoices } from "@/lib/naturalVoice";
 import { readVoicePrefs, useVoicePrefs } from "@/lib/prefs";
 
-type Msg = { id: number; role: "user" | "assistant" | "error" | "notice"; text: string; actions?: AgentAction[]; tag?: string };
+type Msg = {
+  id: number;
+  role: "user" | "assistant" | "error" | "notice";
+  text: string;
+  actions?: AgentAction[];
+  tag?: string;
+  /** The user interrupted while this reply was being spoken (text stays, fully). */
+  stopped?: boolean;
+  /** Arrived after the user had interrupted the "thinking" state: shown, not spoken. */
+  late?: boolean;
+};
 
 const CONV_KEY = "nova.conversationId";
 /** Local date (YYYY-MM-DD) of the last automatic briefing, so it plays once per day. */
 const AUTO_BRIEF_KEY = "nova.lastAutoBriefing";
 const HOLD_MS = 350;
+/** A transcript this soon after an ack may start with the ack itself (picked up by the mic). */
+const ACK_ECHO_MS = 4000;
 
 const STATUS: Record<OrbState, string> = {
   idle: "Ready",
@@ -74,7 +88,22 @@ export default function AssistantPage() {
   const prefsRef = useRef(prefs);
   prefsRef.current = prefs;
 
-  const tts = useSpeechSynthesis();
+  const tts = useSpeech();
+  const ttsRef = useRef(tts);
+  ttsRef.current = tts;
+
+  // ---- Turn controller: questions run strictly in order, one /agent request at a time.
+  const queueRef = useRef<string[]>([]);
+  const lastQueued = useRef<{ text: string; at: number } | null>(null);
+  /** Message id whose reply is being spoken right now. */
+  const speakingIdRef = useRef<number | null>(null);
+  /** The user interrupted while the current request was in flight. */
+  const lateRef = useRef(false);
+  const ackIndex = useRef(0);
+  const ackAt = useRef(0);
+  const pendingRef = useRef<string | null>(null);
+  pendingRef.current = pending;
+  const listeningRef = useRef(false);
 
   useEffect(() => {
     try {
@@ -87,15 +116,60 @@ export default function AssistantPage() {
   const push = useCallback((m: Omit<Msg, "id">) => {
     const id = nextId.current++;
     setMessages((list) => [...list, { ...m, id }]);
+    return id;
   }, []);
 
-  const send = useCallback(
-    async (raw: string) => {
-      const message = raw.trim().slice(0, 2000);
-      if (!message || busyRef.current) return;
-      busyRef.current = true;
-      tts.cancel();
-      push({ role: "user", text: message });
+  /** Speak a reply and remember which message is being spoken (for the "Stopped speaking" marker). */
+  const speakReply = useCallback((id: number, reply: string) => {
+    const p = prefsRef.current;
+    if (!p.speak || !reply) return;
+    speakingIdRef.current = id;
+    ttsRef.current.speak(reply, {
+      voiceURI: p.voiceURI,
+      style: p.voiceStyle,
+      rate: p.rate,
+      lang: p.lang,
+      onEnd: () => {
+        if (speakingIdRef.current === id) speakingIdRef.current = null;
+      },
+    });
+  }, []);
+
+  /** Stop any spoken reply; the message keeps its full text and gets a subtle marker. */
+  const stopSpeaking = useCallback(() => {
+    const id = speakingIdRef.current;
+    speakingIdRef.current = null;
+    ttsRef.current.cancel();
+    if (id !== null) setMessages((list) => list.map((m) => (m.id === id ? { ...m, stopped: true } : m)));
+  }, []);
+
+  /**
+   * Barge-in: called when the user presses the mic / holds Space / taps the orb / talks over Nova.
+   * Stops all audio at once, says a short rotating acknowledgement, and (if a request is in
+   * flight) marks its answer as "late" so it's shown but not spoken. Returns whether anything
+   * was interrupted. During a Yes/No confirmation it only stops the audio (no ack).
+   */
+  const interrupt = useCallback(() => {
+    const speakingNow = ttsRef.current.speaking || speakingIdRef.current !== null;
+    const thinkingNow = busyRef.current;
+    if (!speakingNow && !thinkingNow) return false;
+    stopSpeaking();
+    if (thinkingNow) lateRef.current = true;
+    if (pendingRef.current && !thinkingNow) return true;
+    const ack = INTERRUPT_ACKS[ackIndex.current++ % INTERRUPT_ACKS.length];
+    ackAt.current = Date.now();
+    ttsRef.current.ack(ack);
+    return true;
+  }, [stopSpeaking]);
+
+  /** Drop an ack the mic overheard at the start of the user's words. */
+  const cleanHeard = (t: string) => (Date.now() - ackAt.current < ACK_ECHO_MS ? stripAck(t, INTERRUPT_ACKS) : t.trim());
+
+  /** One /agent round trip. Only ever called from `pump`, so never in parallel. */
+  const runTurn = useCallback(
+    async (message: string) => {
+      if (speakingIdRef.current !== null || ttsRef.current.speaking) stopSpeaking();
+      lateRef.current = false;
       setPending(null);
       setThinking(true);
       try {
@@ -110,19 +184,50 @@ export default function AssistantPage() {
         } catch {
           /* ignore */
         }
-        push({ role: "assistant", text: res.reply, actions: res.actions });
-        setPending(res.pendingConfirmation?.summary ?? null);
+        // Interrupted while thinking and a newer question is queued / being asked: show, don't speak.
+        const late = lateRef.current && (queueRef.current.length > 0 || listeningRef.current || transcribingRef.current);
+        const id = push({ role: "assistant", text: res.reply, actions: res.actions, late });
+        setPending(queueRef.current.length ? null : (res.pendingConfirmation?.summary ?? null));
         if (res.actions.some((a) => a.ok)) notifyDataChanged();
-        const p = prefsRef.current;
-        if (p.speak && res.reply) tts.speak(res.reply, { voiceURI: p.voiceURI, style: p.voiceStyle, rate: p.rate, lang: p.lang });
+        if (!late) speakReply(id, res.reply);
       } catch (err) {
         push({ role: "error", text: errorMessage(err) });
       } finally {
-        busyRef.current = false;
-        setThinking(false);
+        lateRef.current = false;
       }
     },
-    [push, tts],
+    [push, speakReply, stopSpeaking],
+  );
+
+  const pump = useCallback(async () => {
+    if (busyRef.current) return; // the running loop will pick up whatever was queued
+    busyRef.current = true;
+    try {
+      while (queueRef.current.length) await runTurn(queueRef.current.shift()!);
+    } finally {
+      busyRef.current = false;
+      setThinking(false);
+    }
+  }, [runTurn]);
+
+  /**
+   * Ask something. While a request is in flight, voice questions (`queue: true`) wait their turn;
+   * anything else is a double-send and is ignored (the ref guard from before).
+   */
+  const send = useCallback(
+    (raw: string, opts: { queue?: boolean } = {}) => {
+      const message = raw.trim().slice(0, 2000);
+      if (!message) return;
+      if (busyRef.current && !opts.queue) return;
+      const now = Date.now();
+      // Same words twice within a second (two recognizers, double tap): one question.
+      if (lastQueued.current && lastQueued.current.text === message && now - lastQueued.current.at < 1000) return;
+      lastQueued.current = { text: message, at: now };
+      push({ role: "user", text: message });
+      queueRef.current.push(message);
+      void pump();
+    },
+    [push, pump],
   );
 
   /** "Brief me": GET /briefing and speak its text, no agent/LLM involved. */
@@ -130,12 +235,12 @@ export default function AssistantPage() {
     async (opts: { auto?: boolean } = {}) => {
       if (busyRef.current) return;
       busyRef.current = true;
-      tts.cancel();
+      stopSpeaking();
       if (!opts.auto) push({ role: "user", text: "Brief me" });
       setThinking(true);
       try {
         const b = await api.briefing.today({ tz: timezone() });
-        push({ role: "assistant", text: b.text, tag: opts.auto ? "Your morning briefing" : "Daily briefing" });
+        const id = push({ role: "assistant", text: b.text, tag: opts.auto ? "Your morning briefing" : "Daily briefing" });
         if (opts.auto) {
           try {
             window.localStorage.setItem(AUTO_BRIEF_KEY, dayKey());
@@ -143,8 +248,7 @@ export default function AssistantPage() {
             /* ignore */
           }
         }
-        const p = prefsRef.current;
-        if (p.speak && b.text) tts.speak(b.text, { voiceURI: p.voiceURI, style: p.voiceStyle, rate: p.rate, lang: p.lang });
+        speakReply(id, b.text);
       } catch (err) {
         push({ role: "error", text: errorMessage(err) });
       } finally {
@@ -152,7 +256,7 @@ export default function AssistantPage() {
         setThinking(false);
       }
     },
-    [push, tts],
+    [push, speakReply, stopSpeaking],
   );
 
   // Optional auto-briefing on the first open of the day (Settings, off by default).
@@ -172,8 +276,11 @@ export default function AssistantPage() {
 
   const rec = useSpeechRecognition({
     lang: prefs.lang,
-    onFinal: (t) => void send(t),
-    onSpeechStart: () => tts.cancel(), // never talk over the user
+    onFinal: (t) => send(cleanHeard(t), { queue: true }),
+    // Never talk over the user (a reply can start while they're mid-question).
+    onSpeechStart: () => {
+      if (speakingIdRef.current !== null) stopSpeaking();
+    },
   });
 
   // ---- Server STT fallback (no SpeechRecognition): record with MediaRecorder, POST /transcribe.
@@ -181,6 +288,7 @@ export default function AssistantPage() {
   const voiceMode: "browser" | "server" | "none" | null =
     rec.supported === null ? null : rec.supported ? "browser" : recorder.supported && !sttDown ? "server" : recorder.supported === null ? null : "none";
   const listening = rec.listening || recorder.recording;
+  listeningRef.current = listening;
   const mic = useMicLevel(listening);
 
   const transcribingRef = useRef(false);
@@ -193,7 +301,7 @@ export default function AssistantPage() {
       try {
         const audio = await blobToDataUrl(blob);
         const { text } = await api.voice.transcribe({ audio, language: prefsRef.current.lang.slice(0, 2) });
-        if (text.trim()) void send(text);
+        if (cleanHeard(text)) send(cleanHeard(text), { queue: true });
         else push({ role: "notice", text: "I couldn't make out any words. Try again, a little closer to the mic." });
       } catch (err) {
         if (err instanceof ApiError && (err.code === "STT_UNAVAILABLE" || (err.status === 503 && err.code !== "STT_RATE_LIMITED"))) {
@@ -253,9 +361,12 @@ export default function AssistantPage() {
   // ---- Push-to-talk: hold = talk while held; quick tap = hands-free until silence / tap again.
   const pressRef = useRef<{ at: number; wasListening: boolean } | null>(null);
   const wakeStopRef = useRef<() => void>(() => undefined);
+  const bargeStopRef = useRef<() => void>(() => undefined);
   const beginTalk = useCallback(() => {
-    if (busyRef.current || transcribingRef.current) return;
-    tts.cancel();
+    if (transcribingRef.current) return;
+    // Speaking or thinking: stop the audio, say "Okay.", and listen for the new question.
+    interrupt();
+    bargeStopRef.current();
     if (voiceMode === "server") {
       recorder.clearError();
       void recorder.start();
@@ -264,7 +375,7 @@ export default function AssistantPage() {
     wakeStopRef.current(); // only one recognizer may own the mic
     rec.clearError();
     rec.start();
-  }, [rec, tts, recorder, voiceMode]);
+  }, [rec, recorder, voiceMode, interrupt]);
   const endTalk = useCallback(() => {
     if (recorder.recording || voiceMode === "server") {
       void recorder.stop().then((b) => (b === undefined ? undefined : handleRecording(b)));
@@ -295,16 +406,66 @@ export default function AssistantPage() {
   };
 
   // ---- Wake word: "Hey <name>" while this page is open + visible, paused while busy or speaking.
+  // ---- Interrupt by voice: while Nova speaks, keep a recognizer running; anything that isn't an
+  // echo of Nova's own words (or a stray word) interrupts. Chrome/Edge only.
+  const [bargePending, setBargePending] = useState(false);
+  const bargeTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const replyTextRef = useRef("");
+  replyTextRef.current = speakingIdRef.current !== null ? (messages.find((m) => m.id === speakingIdRef.current)?.text ?? "") : "";
+  const bargeEnabled = prefs.bargeIn && voiceMode === "browser";
+  const barge = useWakeWord({
+    active: bargeEnabled && (tts.speaking || bargePending) && !rec.listening && !scan,
+    assistantName: name,
+    lang: prefs.lang,
+    trailingMs: 1200,
+    match: (heard) => {
+      // Compare with the chunk being spoken (and the one before), or the whole reply before the
+      // first chunk has started; the acks count as Nova's own words too.
+      const said = `${ttsRef.current.spokenRef.current || replyTextRef.current} ${INTERRUPT_ACKS.join(" ")}`;
+      return isLikelyEcho(heard, said) ? null : heard;
+    },
+    onCandidate: () => {
+      // A real interruption (even if still interim): stop talking now, then wait for the final words.
+      setBargePending(true);
+      if (bargeTimer.current) clearTimeout(bargeTimer.current);
+      bargeTimer.current = setTimeout(() => setBargePending(false), 10_000);
+      interrupt();
+    },
+    onWake: (heard) => {
+      if (bargeTimer.current) clearTimeout(bargeTimer.current);
+      setBargePending(false);
+      const q = cleanHeard(heard);
+      if (q) send(q, { queue: true });
+      else beginTalk(); // only the ack/noise survived: open a normal listening turn
+    },
+  });
+  bargeStopRef.current = () => {
+    if (bargeTimer.current) clearTimeout(bargeTimer.current);
+    setBargePending(false);
+    barge.stopNow();
+  };
+
   const wake = useWakeWord({
-    active: prefs.wakeWord && voiceMode === "browser" && !rec.listening && !working && !tts.speaking && !scan,
+    active: prefs.wakeWord && voiceMode === "browser" && !rec.listening && !working && !tts.speaking && !bargePending && !scan,
     assistantName: name,
     lang: prefs.lang,
     onWake: (command) => {
-      if (command) void send(command);
+      if (command) send(command, { queue: true });
       else beginTalk();
     },
   });
   wakeStopRef.current = wake.stopNow;
+
+  // Natural voice: cache the four interrupt acks once so they play instantly.
+  const acksFetched = useRef(false);
+  useEffect(() => {
+    if (prefs.engine !== "natural" || acksFetched.current) return;
+    acksFetched.current = true;
+    const voice = prefs.naturalVoice;
+    loadNaturalVoices()
+      .then((r) => (r.available ? tts.prefetchAcks(voice) : undefined))
+      .catch(() => undefined);
+  }, [prefs.engine, prefs.naturalVoice, tts]);
 
   // Space bar = hold to talk (unless typing in a field).
   useEffect(() => {
@@ -343,7 +504,9 @@ export default function AssistantPage() {
   }
 
   function newConversation() {
-    tts.cancel();
+    stopSpeaking();
+    queueRef.current = [];
+    bargeStopRef.current();
     rec.abort();
     recorder.cancel();
     convRef.current = undefined;
@@ -374,9 +537,13 @@ export default function AssistantPage() {
       ? "Type a message below"
       : voiceMode === "server"
         ? "Hold the mic to record, or tap to start and tap again to send"
-        : wake.status === "listening"
-          ? `Say “Hey ${name}”, hold the mic, or press Space`
-          : "Hold the mic or press Space to talk";
+        : orbState === "speaking" || orbState === "thinking"
+          ? bargeEnabled && orbState === "speaking"
+            ? "Just start talking to interrupt (headphones help, so I don't hear myself), or tap the orb / mic"
+            : "Tap the orb, press the mic or Space to interrupt"
+          : wake.status === "listening"
+            ? `Say “Hey ${name}”, hold the mic, or press Space`
+            : "Hold the mic or press Space to talk";
   const camId = useId();
 
   return (
@@ -421,7 +588,7 @@ export default function AssistantPage() {
               label={prefs.speak ? "Mute spoken replies" : "Unmute spoken replies"}
               pressed={!prefs.speak}
               onClick={() => {
-                if (prefs.speak) tts.cancel();
+                if (prefs.speak) stopSpeaking();
                 setPrefs({ speak: !prefs.speak });
               }}
               path={prefs.speak ? "M11 5 6 9H3v6h3l5 4V5Zm4.5 3.5a5 5 0 0 1 0 7M18 6a8.5 8.5 0 0 1 0 12" : "M11 5 6 9H3v6h3l5 4V5Zm5 5 5 5m0-5-5 5"}
@@ -437,9 +604,21 @@ export default function AssistantPage() {
 
         {/* Orb + live transcript + confirmation */}
         <section aria-label={`${name} orb`} className="relative flex min-h-0 flex-col items-center justify-center">
-          <div className="relative aspect-square h-full max-h-[min(30rem,42dvh)] w-auto max-w-full lg:max-h-[30rem]">
-            <Orb state={orbState} levelRef={mic.levelRef} label={`${name} is ${STATUS[orbState].replace("…", "").toLowerCase()}`} />
-          </div>
+          <button
+            type="button"
+            onClick={() => (listening ? endTalk() : voiceMode === "none" || voiceMode === null ? interrupt() : beginTalk())}
+            aria-label={
+              orbState === "speaking" || orbState === "thinking"
+                ? `Interrupt ${name} and ask something else`
+                : listening
+                  ? "Stop listening"
+                  : `Talk to ${name}`
+            }
+            title={orbState === "speaking" || orbState === "thinking" ? "Tap to interrupt" : undefined}
+            className="relative aspect-square h-full max-h-[min(30rem,42dvh)] w-auto max-w-full cursor-pointer appearance-none rounded-full border-0 bg-transparent p-0 focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-accent lg:max-h-[30rem]"
+          >
+            <Orb state={orbState} levelRef={mic.levelRef} speakLevelRef={tts.levelRef} label={`${name} is ${STATUS[orbState].replace("…", "").toLowerCase()}`} />
+          </button>
           <div className="min-h-[3.5rem] w-full max-w-xl px-2 text-center" aria-live="polite">
             {listening ? (
               <p className="text-lg font-medium leading-snug text-fg sm:text-xl">
@@ -509,6 +688,15 @@ export default function AssistantPage() {
               </div>
             )}
           </div>
+
+          {tts.notice && (
+            <div role="status" className="flex items-start gap-2 rounded-control border border-sky-400/30 bg-sky-400/10 px-3 py-2 text-xs text-fg">
+              <span className="min-w-0 flex-1">{tts.notice}</span>
+              <button type="button" onClick={tts.dismissNotice} aria-label="Dismiss" className="-my-0.5 shrink-0 rounded px-1 text-muted hover:text-fg">
+                ✕
+              </button>
+            </div>
+          )}
 
           {voiceNotice && (
             <div role="status" className="rounded-control border border-warn/30 bg-warn/10 px-3 py-2 text-xs text-fg">
@@ -676,10 +864,20 @@ function Caption({ msg, name, currency }: { msg: Msg; name: string; currency: st
   return (
     <div className="animate-fade-in">
       {msg.tag && <p className="mb-1 text-[11px] font-medium uppercase tracking-wider text-accent/80">☀ {msg.tag}</p>}
+      {msg.late && (
+        <p className="mb-1 flex items-center gap-1 text-[11px] text-faint">
+          <span aria-hidden="true">↳</span> Answered while you asked something else
+        </p>
+      )}
       <p className="max-w-[92%] rounded-2xl rounded-bl-md border border-line/60 bg-surface-2/80 px-3 py-2 text-sm leading-relaxed text-fg">
         <span className="sr-only">{name}: </span>
         {msg.text}
       </p>
+      {msg.stopped && (
+        <p className="mt-1 flex items-center gap-1 text-[11px] text-faint">
+          <span aria-hidden="true" className="inline-block size-1.5 rounded-[2px] bg-faint/70" /> Stopped speaking
+        </p>
+      )}
       {msg.actions && msg.actions.length > 0 && (
         <ul className="mt-1.5 flex flex-wrap gap-1.5" aria-label="Actions taken">
           {msg.actions.map((a, i) => (

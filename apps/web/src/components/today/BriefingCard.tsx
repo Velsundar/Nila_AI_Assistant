@@ -5,7 +5,7 @@ import Link from "next/link";
 import { useCallback, useEffect, useState } from "react";
 import { SpeakerIcon } from "@/components/dashboard/WeeklyReportCard";
 import { Button, Card, Spinner } from "@/components/ui";
-import { useSpeechSynthesis } from "@/hooks/useSpeechSynthesis";
+import { useSpeech } from "@/hooks/useSpeech";
 import { api, errorMessage } from "@/lib/api";
 import { cn } from "@/lib/cn";
 import { DATA_CHANGED_EVENT, DATA_VERSION_KEY } from "@/lib/events";
@@ -58,7 +58,7 @@ export function useBriefing() {
 
 export function BriefingCard({ currency, className }: { currency: string; className?: string }) {
   const { briefing: b, error, loading, reload } = useBriefing();
-  const tts = useSpeechSynthesis();
+  const tts = useSpeech();
   const [prefs] = useVoicePrefs();
 
   return (
