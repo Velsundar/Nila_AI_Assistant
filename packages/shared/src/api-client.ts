@@ -12,11 +12,14 @@ import type {
   Expense,
   ExpenseQuery,
   LoginInput,
+  NaturalVoicesResult,
   Note,
   ReceiptScanResult,
   RegisterInput,
   Reminder,
   ScanReceiptInput,
+  SpeakInput,
+  SpeakResult,
   SpendingSummary,
   Task,
   TaskQuery,
@@ -139,6 +142,9 @@ export function createApiClient({ baseUrl, getToken, onUnauthorized }: ApiClient
     },
     voice: {
       transcribe: (input: TranscribeInput) => request<{ text: string }>("POST", "/transcribe", input),
+      /** Natural (server) voices and whether they can be used right now. */
+      naturalVoices: () => request<NaturalVoicesResult>("GET", "/speak/voices"),
+      speak: (input: SpeakInput) => request<SpeakResult>("POST", "/speak", input),
     },
     agent: {
       send: (input: AgentRequest) => request<AgentResponse>("POST", "/agent", input),

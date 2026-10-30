@@ -46,3 +46,12 @@ Clients should use `createApiClient()` from `@nova/shared` instead of raw fetch.
 | POST | /api/transcribe | TranscribeInput (JSON, up to ~14 MB body) | `{ text }` |
 
 `PATCH /api/auth/me` also accepts `city`; `User` includes `city`.
+
+## v3: natural voice (Groq Orpheus)
+
+| Method | Path | Body | Response |
+|---|---|---|---|
+| GET | /api/speak/voices | — | NaturalVoicesResult (always 200; `available:false` + `reason` when unusable) |
+| POST | /api/speak | SpeakInput (≤ 400 chars, one sentence or two) | SpeakResult (`data:audio/wav;base64,...`) |
+
+Errors on POST /api/speak: 503 `TTS_UNAVAILABLE` (no key / terms not accepted: clients fall back to the device voice), 429 `TTS_RATE_LIMITED`, 429 `DAILY_LIMIT`, 400 `VALIDATION_ERROR` (unknown voice).

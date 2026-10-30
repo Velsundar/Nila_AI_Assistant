@@ -273,6 +273,42 @@ export const TranscribeSchema = z.object({
 });
 export type TranscribeInput = z.infer<typeof TranscribeSchema>;
 
+// ---------- Natural voice (server text-to-speech, Groq Orpheus) ----------
+
+/**
+ * One short piece of speech. Clients split replies into sentences and request them one at a
+ * time, so the first sentence starts playing while the next is generated.
+ */
+export const SpeakSchema = z.object({
+  text: z.string().trim().min(1).max(400),
+  /** A voice id from GET /api/speak/voices; the server default if omitted. */
+  voice: z.string().max(40).optional(),
+});
+export type SpeakInput = z.infer<typeof SpeakSchema>;
+
+export type SpeakResult = {
+  /** "data:audio/wav;base64,..." */
+  audio: string;
+  voice: string;
+};
+
+export type NaturalVoice = { id: string; gender?: "female" | "male" };
+
+export type NaturalVoicesResult = {
+  /** false when the server has no key, or the Groq account hasn't accepted the model's terms. */
+  available: boolean;
+  reason?: "NO_KEY" | "TERMS_REQUIRED" | "UNAVAILABLE";
+  voices: NaturalVoice[];
+  /** Server default voice (female). */
+  defaultVoice?: string;
+};
+
+/**
+ * Short acknowledgements the assistant says when the user interrupts it ("Mm-hmm", "Okay").
+ * Clients cache their audio once rather than generating it per use.
+ */
+export const INTERRUPT_ACKS = ["Mm-hmm.", "Okay.", "Ah, got it.", "Sure."] as const;
+
 // ---------- Agent (voice assistant) ----------
 
 export const AgentRequestSchema = z.object({
