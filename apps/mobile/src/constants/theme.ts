@@ -1,4 +1,4 @@
-import type { Category } from "@nova/shared";
+import type { Category, IncomeCategory } from "@nova/shared";
 
 /** Single source of truth for the app's dark sci-fi look. */
 export const Colors = {
@@ -55,4 +55,15 @@ export const CategoryMeta: Record<Category, { color: string; icon: string }> = {
   Education: { color: "#818CF8", icon: "school-outline" },
   Travel: { color: "#38BDF8", icon: "airplane-outline" },
   Other: { color: "#94A3B8", icon: "ellipsis-horizontal-circle-outline" },
+};
+
+/** Income reads as money in: every category is a shade of green/teal so it never looks like spending. */
+export const IncomeCategoryMeta: Record<IncomeCategory, { color: string; icon: string }> = {
+  Salary: { color: "#34D399", icon: "briefcase-outline" },
+  Business: { color: "#2DD4BF", icon: "storefront-outline" },
+  Refund: { color: "#4ADE80", icon: "return-down-back-outline" },
+  Gift: { color: "#86EFAC", icon: "gift-outline" },
+  Transfer: { color: "#5EEAD4", icon: "swap-horizontal-outline" },
+  Interest: { color: "#A3E635", icon: "trending-up-outline" },
+  Other: { color: "#6EE7B7", icon: "cash-outline" },
 };

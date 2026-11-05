@@ -38,3 +38,12 @@
 - `details.retryAfter` (seconds) on 429 TTS_RATE_LIMITED is in the API source but not in docs/API.md or a shared type. Please document it, and say whether DAILY_LIMIT will ever carry it.
 - Optional: a server-side trim of leading silence on /api/speak would make the client-side WAV trim unnecessary (web would benefit too).
 - [12:37] 🏁 v3 mobile DONE
+
+## v4: income
+
+- [v4] Read contract: INCOME_CATEGORIES, Income, CreateIncomeSchema, IncomeSummary, api.income.*, API.md v4, manageIncome tool (add/list/summary/delete, delete confirmed)
+- [v4] ✅ constants/theme.ts: IncomeCategoryMeta (green/teal palette + Ionicons per income category, glyphs checked in the installed glyphmap)
+- [v4] ✅ components/AddIncomeSheet.tsx: separate sheet (same layout as AddExpenseSheet; no receipt path so a toggle would have tangled the receipt logic). Amount, category chips (default Salary), From (payer), Note; validated with CreateIncomeSchema, source "manual"
+- [v4] ✅ Expenses tab: total card now shows "Received this month" (+green) and "Net (in − out)" (green, or red with − when negative). Income summary is fetched with the spending summary's own from/to so both cover the same range. New "Money in" section (Add income pill in the header, last 20 entries: payer/note/category, date, category, 🎙 for voice, +green amount), long-press / a11y action delete with optimistic removal, same as expenses. Income calls `.catch` → the spending view keeps working against a pre-v4 API (received/net hidden)
+- [v4] ✅ lib/actions.ts: manageIncome chips (Income added / deleted / summary / Recent income) routed to /expenses; fallback regex knows "income". Refresh itself already happens for any ok agent action (invalidateData in the assistant screen), so "75k salary credited" refreshes the Expenses tab
+- [v4] ✅ Verified: typecheck clean, check-voice-logic 65/65, expo export android OK (output in scratchpad, deleted). Not run on a device/simulator; no live API calls made

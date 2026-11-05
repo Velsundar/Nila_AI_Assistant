@@ -30,6 +30,12 @@ export function describeAction(a: AgentAction): ActionChip {
       return { label: "Recent expenses", icon: "list-outline", route: "/expenses" };
     case "getSpendingSummary":
       return { label: "Spending summary", icon: "pie-chart-outline", route: "/expenses" };
+    case "manageIncome":
+      // Money received lives on the Expenses tab ("Money in"); any of these refreshes it.
+      if (action === "add") return { label: "Income added", icon: "arrow-down-circle-outline", route: "/expenses" };
+      if (action === "delete") return { label: "Income deleted", icon: "trash-outline", route: "/expenses" };
+      if (action === "summary") return { label: "Income summary", icon: "wallet-outline", route: "/expenses" };
+      return { label: "Recent income", icon: "list-outline", route: "/expenses" };
     case "setBudget":
       return { label: "Budget set", icon: "speedometer-outline", route: "/expenses" };
     case "getBudgets":
@@ -62,7 +68,7 @@ export function describeAction(a: AgentAction): ActionChip {
   }
   // Generic fallback for tools this build doesn't know about yet.
   const t = a.tool;
-  const route: ActionRoute | undefined = /expense|budget|spend|summary|categor|report|receipt/i.test(t)
+  const route: ActionRoute | undefined = /expense|income|budget|spend|summary|categor|report|receipt/i.test(t)
     ? "/expenses"
     : /task|todo|note|remind|brief|weather|list/i.test(t)
       ? "/today"

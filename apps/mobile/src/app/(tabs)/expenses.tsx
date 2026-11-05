@@ -3,20 +3,29 @@ import { useFocusEffect } from "expo-router";
 import { useCallback, useRef, useState } from "react";
 import { ActivityIndicator, Alert, Pressable, RefreshControl, ScrollView, StyleSheet, Text, View } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
-import type { BudgetStatus, Expense, ReceiptScanResult, SpendingSummary, WeeklyReport } from "@nova/shared";
+import type { BudgetStatus, Expense, Income, IncomeSummary, ReceiptScanResult, SpendingSummary, WeeklyReport } from "@nova/shared";
 
 import { AddExpenseSheet } from "@/components/AddExpenseSheet";
+import { AddIncomeSheet } from "@/components/AddIncomeSheet";
 import { Banner, Card, ProgressBar, SectionTitle } from "@/components/ui";
 import { WeeklyReportCard } from "@/components/WeeklyReportCard";
 import { useSpeaker } from "@/hooks/useSpeaker";
-import { CategoryMeta, Colors, Font, Radius, Spacing } from "@/constants/theme";
+import { CategoryMeta, Colors, Font, IncomeCategoryMeta, Radius, Spacing } from "@/constants/theme";
 import { api, errorMessage } from "@/lib/api";
 import { useAppState } from "@/lib/app-state";
 import { useAuth } from "@/lib/auth";
 import { deviceTimezone, formatDate, formatMoney, monthLabel } from "@/lib/format";
 import { pickReceiptImage } from "@/lib/receipt";
 
-type Data = { summary: SpendingSummary; budgets: BudgetStatus[]; expenses: Expense[]; report: WeeklyReport | null };
+type Data = {
+  summary: SpendingSummary;
+  budgets: BudgetStatus[];
+  expenses: Expense[];
+  report: WeeklyReport | null;
+  /** null when the API predates v4 income: the spending view still works. */
+  incomeSummary: IncomeSummary | null;
+  income: Income[];
+};
 
 function budgetColor(pct: number) {
   if (pct >= 100) return Colors.danger;
@@ -33,6 +42,8 @@ export default function ExpensesScreen() {
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [adding, setAdding] = useState(false);
+  const [addingIncome, setAddingIncome] = useState(false);
+  const [incomeSheetKey, setIncomeSheetKey] = useState(0);
   const [receipt, setReceipt] = useState<ReceiptScanResult | null>(null);
   const [sheetKey, setSheetKey] = useState(0);
   const [scanning, setScanning] = useState(false);
@@ -43,13 +54,20 @@ export default function ExpensesScreen() {
     try {
       // The weekly report is optional: an older API without it shouldn't break this screen.
       const reportP = api.reports.weekly({ tz: deviceTimezone() }).catch(() => null);
-      const [summary, { budgets }, { expenses }, report] = await Promise.all([
-        api.expenses.summary(),
+      // Income summary uses the spending summary's exact range so "Net" compares like with like.
+      const summariesP = api.expenses.summary().then(async (summary) => ({
+        summary,
+        incomeSummary: await api.income.summary({ from: summary.from, to: summary.to }).catch(() => null),
+      }));
+      const incomeP = api.income.list({ limit: 20 }).then((r) => r.income).catch(() => [] as Income[]);
+      const [{ summary, incomeSummary }, { budgets }, { expenses }, report, income] = await Promise.all([
+        summariesP,
         api.budgets.list(),
         api.expenses.list({ limit: 50 }),
         reportP,
+        incomeP,
       ]);
-      setData({ summary, budgets, expenses, report });
+      setData({ summary, budgets, expenses, report, incomeSummary, income });
       setError(null);
     } catch (e) {
       setError(errorMessage(e));
@@ -101,6 +119,11 @@ export default function ExpensesScreen() {
     setAdding(true);
   };
 
+  const openIncome = () => {
+    setIncomeSheetKey((k) => k + 1);
+    setAddingIncome(true);
+  };
+
   const onRefresh = async () => {
     setRefreshing(true);
     await load();
@@ -128,6 +151,29 @@ export default function ExpensesScreen() {
     ]);
   };
 
+  const confirmDeleteIncome = (i: Income) => {
+    const label = `${formatMoney(i.amount, currency)} · ${i.payer || i.note || i.category}`;
+    Alert.alert("Delete income?", label, [
+      { text: "Cancel", style: "cancel" },
+      {
+        text: "Delete",
+        style: "destructive",
+        onPress: async () => {
+          // Optimistic removal; reload either way to keep totals in sync.
+          setData((d) => (d ? { ...d, income: d.income.filter((x) => x.id !== i.id) } : d));
+          try {
+            await api.income.remove(i.id);
+          } catch (err) {
+            Alert.alert("Couldn't delete", errorMessage(err));
+          }
+          invalidateData();
+        },
+      },
+    ]);
+  };
+
+  const received = data?.incomeSummary?.total ?? 0;
+  const net = received - (data?.summary.total ?? 0);
   const maxCat = Math.max(1, ...(data?.summary.byCategory.map((c) => c.total) ?? [1]));
   const byCategory = [...(data?.summary.byCategory ?? [])].sort((a, b) => b.total - a.total);
 
@@ -169,6 +215,27 @@ export default function ExpensesScreen() {
               <Text style={styles.dim}>
                 {data.summary.count} expense{data.summary.count === 1 ? "" : "s"} this month
               </Text>
+              {data.incomeSummary && (
+                <View style={styles.flowRow}>
+                  <View style={styles.flowCell} accessible accessibilityLabel={`Received this month: ${formatMoney(received, currency)}`}>
+                    <Text style={styles.small}>Received this month</Text>
+                    <Text style={[styles.flowValue, { color: Colors.success }]} numberOfLines={1} adjustsFontSizeToFit>
+                      +{formatMoney(received, currency)}
+                    </Text>
+                  </View>
+                  <View
+                    style={styles.flowCell}
+                    accessible
+                    accessibilityLabel={`Net this month: ${net < 0 ? "minus " : ""}${formatMoney(Math.abs(net), currency)}`}
+                  >
+                    <Text style={styles.small}>Net (in − out)</Text>
+                    <Text style={[styles.flowValue, { color: net < 0 ? Colors.danger : Colors.success }]} numberOfLines={1} adjustsFontSizeToFit>
+                      {net < 0 ? "−" : "+"}
+                      {formatMoney(Math.abs(net), currency)}
+                    </Text>
+                  </View>
+                </View>
+              )}
             </Card>
 
             {data.report && (
@@ -231,6 +298,67 @@ export default function ExpensesScreen() {
                   })
                 )}
               </Card>
+            </View>
+
+            <View>
+              <SectionTitle
+                right={
+                  <Pressable
+                    onPress={openIncome}
+                    accessibilityRole="button"
+                    accessibilityLabel="Add income"
+                    hitSlop={8}
+                    style={({ pressed }) => [styles.incomeBtn, pressed && { opacity: 0.7 }]}
+                  >
+                    <Ionicons name="add" size={16} color={Colors.success} />
+                    <Text style={styles.incomeBtnText}>Add income</Text>
+                  </Pressable>
+                }
+              >
+                Money in
+              </SectionTitle>
+              {data.income.length === 0 ? (
+                <Card>
+                  <Text style={styles.dim}>No income logged yet. Tap Add income or say "Hey Nila, 75k salary credited".</Text>
+                </Card>
+              ) : (
+                <View style={styles.list}>
+                  {data.income.map((i) => {
+                    const meta = IncomeCategoryMeta[i.category] ?? IncomeCategoryMeta.Other;
+                    const title = i.payer || i.note || i.category;
+                    const label = `Received ${formatMoney(i.amount, currency)} from ${title}, ${formatDate(i.date)}`;
+                    return (
+                      <Pressable
+                        key={i.id}
+                        onLongPress={() => confirmDeleteIncome(i)}
+                        delayLongPress={350}
+                        accessibilityRole="button"
+                        accessibilityLabel={label}
+                        accessibilityHint="Long press to delete"
+                        accessibilityActions={[{ name: "delete", label: "Delete income" }]}
+                        onAccessibilityAction={(ev) => ev.nativeEvent.actionName === "delete" && confirmDeleteIncome(i)}
+                        style={({ pressed }) => [styles.item, pressed && { backgroundColor: Colors.surfaceAlt }]}
+                      >
+                        <View style={[styles.itemIcon, { backgroundColor: `${meta.color}22` }]}>
+                          <Ionicons name={meta.icon as keyof typeof Ionicons.glyphMap} size={18} color={meta.color} />
+                        </View>
+                        <View style={{ flex: 1 }}>
+                          <Text style={styles.itemTitle} numberOfLines={1}>
+                            {title}
+                          </Text>
+                          <Text style={styles.small} numberOfLines={1}>
+                            {formatDate(i.date)} · {i.category}
+                            {i.source === "voice" ? " · 🎙" : ""}
+                            {i.payer && i.note ? ` · ${i.note}` : ""}
+                          </Text>
+                        </View>
+                        <Text style={[styles.amount, { color: Colors.success }]}>+{formatMoney(i.amount, currency)}</Text>
+                      </Pressable>
+                    );
+                  })}
+                  <Text style={[styles.small, { textAlign: "center", marginTop: Spacing.sm }]}>Long-press an entry to delete it</Text>
+                </View>
+              )}
             </View>
 
             <View>
@@ -300,6 +428,8 @@ export default function ExpensesScreen() {
         }}
         onCreated={invalidateData}
       />
+
+      <AddIncomeSheet key={`income-${incomeSheetKey}`} visible={addingIncome} onClose={() => setAddingIncome(false)} onCreated={invalidateData} />
     </SafeAreaView>
   );
 }
@@ -315,6 +445,28 @@ const styles = StyleSheet.create({
   small: { color: Colors.textDim, ...Font.small },
   row: { flexDirection: "row", alignItems: "center", gap: Spacing.sm },
   rowBetween: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", gap: Spacing.sm },
+  flowRow: {
+    flexDirection: "row",
+    gap: Spacing.md,
+    marginTop: Spacing.md,
+    paddingTop: Spacing.md,
+    borderTopWidth: StyleSheet.hairlineWidth,
+    borderTopColor: Colors.border,
+  },
+  flowCell: { flex: 1, gap: 2 },
+  flowValue: { ...Font.h2 },
+  incomeBtn: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 4,
+    minHeight: 32,
+    paddingHorizontal: Spacing.md,
+    borderRadius: Radius.pill,
+    borderWidth: 1,
+    borderColor: Colors.success,
+    backgroundColor: "rgba(52,211,153,0.08)",
+  },
+  incomeBtnText: { color: Colors.success, ...Font.small, fontWeight: "700" },
   catName: { color: Colors.text, ...Font.body, fontWeight: "600" },
   amount: { color: Colors.text, ...Font.body, fontWeight: "700" },
   list: { backgroundColor: Colors.surface, borderRadius: Radius.lg, borderWidth: 1, borderColor: Colors.border, overflow: "hidden", paddingBottom: Spacing.sm },
