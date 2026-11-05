@@ -16,11 +16,13 @@ function pick(result: unknown, key: string): Record<string, unknown> {
 }
 
 /** Which kind of chip to show (drives the chip's icon). */
-export type ActionKind = "expense" | "budget" | "reminder" | "task" | "note" | "weather" | "briefing" | "report" | "memory" | "other";
+export type ActionKind = "expense" | "income" | "budget" | "reminder" | "task" | "note" | "weather" | "briefing" | "report" | "memory" | "other";
 
 export function actionKind(tool: string): ActionKind {
   const t = tool.toLowerCase();
   if (/weather|forecast/.test(t)) return "weather";
+  // Before "summary"/"expense": manageIncome's summary action is about money received, not spent.
+  if (/income|salary|received/.test(t)) return "income";
   if (/brief/.test(t)) return "briefing";
   if (/weekly|report/.test(t)) return "report";
   if (/task|todo|to_do|checklist|shopping/.test(t)) return "task";
@@ -34,6 +36,7 @@ export function actionKind(tool: string): ActionKind {
 
 export const ACTION_ICON: Record<ActionKind, string> = {
   expense: "₹",
+  income: "↓",
   budget: "◔",
   reminder: "⏰",
   task: "☑",
@@ -49,7 +52,7 @@ export const ACTION_ICON: Record<ActionKind, string> = {
 export function describeAction(a: AgentAction, currency = "INR"): string {
   const tool = a.tool.toLowerCase();
   const kind = actionKind(tool);
-  const resultKey = { budget: "budget", reminder: "reminder", task: "task", note: "note", weather: "weather", report: "report", briefing: "briefing" }[kind as string] ?? "expense";
+  const resultKey = { budget: "budget", reminder: "reminder", task: "task", note: "note", weather: "weather", report: "report", briefing: "briefing", income: "income" }[kind as string] ?? "expense";
   const result = pick(a.result, resultKey);
   const args = { ...result, ...a.args };
   const amount = num(args.amount) ?? num(args.monthlyLimit);
@@ -112,6 +115,22 @@ export function describeAction(a: AgentAction, currency = "INR"): string {
       return "Checked reminders";
     case "memory":
       return join("Remembered", clip(str(args.fact) ?? str(args.text)));
+    case "income": {
+      // manageIncome { action: add|list|summary|delete } → { income } | { income[] } | { totalReceived, … } | { deleted }
+      const r = (a.result && typeof a.result === "object" ? a.result : {}) as Record<string, unknown>;
+      const action = str(args.action)?.toLowerCase() ?? tool;
+      if (/(delete|remove)/.test(action)) {
+        const d = pick(r, "deleted");
+        const amt = num(d.amount) ?? amount;
+        return join(`Deleted ${amt !== undefined ? formatMoney(amt, currency) : "income"}`, str(d.payer) ?? str(args.payer));
+      }
+      if (/(add|create|log|record)/.test(action)) return join(`Received ${money ?? "income"}`, category, str(args.payer));
+      if (/(summary|total)/.test(action)) {
+        const total = num(r.totalReceived);
+        return join("Checked income", total !== undefined ? formatMoney(total, currency) : undefined);
+      }
+      return "Looked up income";
+    }
     case "expense":
       if (/(add|create|log|record)/.test(tool)) return join(`Added ${money ?? "expense"}`, category, merchant);
       if (/(delete|remove)/.test(tool)) return join(`Deleted ${money ?? "expense"}`, category);

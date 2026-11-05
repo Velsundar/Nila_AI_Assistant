@@ -1,9 +1,10 @@
 "use client";
 
-import { CATEGORIES, type BudgetStatus, type Category, type Expense, type SpendingSummary } from "@nova/shared";
+import { CATEGORIES, type BudgetStatus, type Category, type Expense, type Income, type IncomeSummary, type SpendingSummary } from "@nova/shared";
 import { useCallback, useEffect, useRef, useState, type FormEvent } from "react";
 import { WeeklyReportCard } from "@/components/dashboard/WeeklyReportCard";
 import { AddExpenseForm, type ExpenseDraft } from "@/components/expenses/AddExpenseForm";
+import { AddIncomeForm } from "@/components/expenses/AddIncomeForm";
 import { ReceiptDropzone } from "@/components/expenses/ReceiptScanner";
 import { useAuth } from "@/components/AuthProvider";
 import { CategoryDonut, DailyBars } from "@/components/dashboard/Charts";
@@ -13,7 +14,7 @@ import { cn } from "@/lib/cn";
 import { DATA_CHANGED_EVENT, DATA_VERSION_KEY, notifyDataChanged } from "@/lib/events";
 import { dayKey, formatMoney, monthKey, monthLabel, monthRange, shiftMonth, shortDate } from "@/lib/format";
 
-type Data = { summary: SpendingSummary; expenses: Expense[]; budgets: BudgetStatus[] };
+type Data = { summary: SpendingSummary; expenses: Expense[]; budgets: BudgetStatus[]; incomeSummary: IncomeSummary | null; income: Income[] };
 
 export default function DashboardPage() {
   const { user } = useAuth();
@@ -32,13 +33,16 @@ export default function DashboardPage() {
     setError(null);
     const { from, to } = monthRange(month);
     try {
-      const [summary, list, budgets] = await Promise.all([
+      const [summary, list, budgets, incomeSummary, incomeList] = await Promise.all([
         api.expenses.summary({ from, to }),
         api.expenses.list({ from, to, limit: 100 }),
         api.budgets.list(),
+        // Income is optional: an API from before income existed shouldn't take the dashboard down.
+        api.income.summary({ from, to }).catch(() => null),
+        api.income.list({ from, to, limit: 50 }).catch(() => ({ income: [] as Income[] })),
       ]);
       if (id !== reqId.current) return;
-      setData({ summary, expenses: list.expenses, budgets: budgets.budgets });
+      setData({ summary, expenses: list.expenses, budgets: budgets.budgets, incomeSummary, income: incomeList.income });
     } catch (err) {
       if (id === reqId.current) setError(errorMessage(err));
     } finally {
@@ -66,6 +70,18 @@ export default function DashboardPage() {
     setData((d) => (d ? { ...d, expenses: d.expenses.filter((e) => e.id !== id) } : d));
     try {
       await api.expenses.remove(id);
+      notifyDataChanged();
+    } catch (err) {
+      setData(prev);
+      setError(errorMessage(err));
+    }
+  }
+
+  async function removeIncome(id: string) {
+    const prev = data;
+    setData((d) => (d ? { ...d, income: d.income.filter((i) => i.id !== id) } : d));
+    try {
+      await api.income.remove(id);
       notifyDataChanged();
     } catch (err) {
       setData(prev);
@@ -118,8 +134,14 @@ export default function DashboardPage() {
         </div>
       ) : data ? (
         <div className={cn("grid grid-cols-1 gap-4 transition-opacity lg:grid-cols-3", loading && "opacity-70")} aria-busy={loading}>
-          <div className="grid grid-cols-2 gap-4 lg:col-span-3 lg:grid-cols-4">
+          <div className="grid grid-cols-2 gap-4 lg:col-span-3 lg:grid-cols-3">
             <Stat label="Spent this month" value={formatMoney(data.summary.total, currency)} accent />
+            {data.incomeSummary && (
+              <>
+                <Stat label="Received this month" value={formatMoney(data.incomeSummary.total, currency)} tone="ok" />
+                <Net received={data.incomeSummary.total} spent={data.summary.total} currency={currency} />
+              </>
+            )}
             <Stat label="Expenses" value={String(data.summary.count)} />
             <Stat label="Daily average" value={formatMoney(data.summary.total / (isCurrentMonth ? new Date().getDate() : days), currency)} className="max-lg:hidden" />
             <Stat label="Top category" value={topCategory(data.summary) ?? "—"} className="max-lg:hidden" />
@@ -152,6 +174,18 @@ export default function DashboardPage() {
             <ExpenseList expenses={data.expenses} currency={currency} onDelete={removeExpense} />
           </Card>
 
+          <Card title="Add income" className="lg:col-span-1">
+            <AddIncomeForm defaultDate={isCurrentMonth ? dayKey() : `${month}-01`} />
+          </Card>
+
+          <Card
+            title="Money in"
+            className="lg:col-span-2"
+            action={<span className="text-xs text-faint">{data.income.length} shown</span>}
+          >
+            <IncomeList income={data.income} currency={currency} onDelete={removeIncome} />
+          </Card>
+
           <Card title="Budgets" className="lg:col-span-3" action={!isCurrentMonth ? <span className="text-xs text-faint">Showing the current month</span> : undefined}>
             <Budgets budgets={data.budgets} currency={currency} onChanged={() => void load()} />
           </Card>
@@ -166,13 +200,22 @@ function topCategory(s: SpendingSummary) {
   return top && top.total > 0 ? top.category : null;
 }
 
-function Stat({ label, value, accent, className }: { label: string; value: string; accent?: boolean; className?: string }) {
+function Stat({ label, value, accent, tone, className }: { label: string; value: string; accent?: boolean; tone?: "ok" | "danger"; className?: string }) {
   return (
     <div className={cn("rounded-card border border-line bg-surface/80 p-4", accent && "border-accent/30 bg-gradient-to-br from-accent/10 to-glow/5", className)}>
       <div className="text-xs text-muted">{label}</div>
-      <div className={cn("mt-1.5 truncate text-xl font-semibold tabular-nums sm:text-2xl", accent && "text-accent")}>{value}</div>
+      <div className={cn("mt-1.5 truncate text-xl font-semibold tabular-nums sm:text-2xl", accent && "text-accent", tone === "ok" && "text-ok", tone === "danger" && "text-danger")}>
+        {value}
+      </div>
     </div>
   );
+}
+
+/** Received − spent for the month: green with a "+" when you came out ahead, red when you spent more. */
+function Net({ received, spent, currency }: { received: number; spent: number; currency: string }) {
+  const net = Math.round((received - spent) * 100) / 100;
+  const value = net > 0 ? `+${formatMoney(net, currency)}` : formatMoney(net, currency);
+  return <Stat label="Net" value={value} tone={net > 0 ? "ok" : net < 0 ? "danger" : undefined} />;
 }
 
 function Chevron({ dir }: { dir: "left" | "right" }) {
@@ -226,6 +269,55 @@ function ExpenseList({ expenses, currency, onDelete }: { expenses: Expense[]; cu
           )}
         </li>
       ))}
+    </ul>
+  );
+}
+
+function IncomeList({ income, currency, onDelete }: { income: Income[]; currency: string; onDelete: (id: string) => void }) {
+  const [confirming, setConfirming] = useState<string | null>(null);
+  if (!income.length) return <p className="py-8 text-center text-sm text-faint">No income this month. Add it here, or say “75k salary credited”.</p>;
+  return (
+    <ul className="-mx-2 max-h-[20rem] divide-y divide-line/60 overflow-y-auto">
+      {income.map((i) => {
+        const label = i.payer || i.note || i.category;
+        return (
+          <li key={i.id} className="flex items-center gap-3 px-2 py-2.5">
+            <span aria-hidden="true" className="grid size-9 shrink-0 place-items-center rounded-full bg-ok/10 text-xs font-semibold text-ok">
+              {i.category.slice(0, 2)}
+            </span>
+            <div className="min-w-0 flex-1">
+              <div className="truncate text-sm text-fg">{label}</div>
+              <div className="truncate text-xs text-faint">
+                {shortDate(i.date)} · {i.category}
+                {i.source === "voice" && " · 🎙 voice"}
+                {i.payer && i.note && ` · ${i.note}`}
+              </div>
+            </div>
+            <span className="shrink-0 text-sm font-medium tabular-nums text-ok">+{formatMoney(i.amount, currency)}</span>
+            {confirming === i.id ? (
+              <span className="flex shrink-0 gap-1">
+                <Button size="sm" variant="danger" onClick={() => onDelete(i.id)} aria-label={`Confirm delete ${formatMoney(i.amount, currency)} ${label}`}>
+                  Delete
+                </Button>
+                <Button size="sm" variant="ghost" onClick={() => setConfirming(null)}>
+                  Keep
+                </Button>
+              </span>
+            ) : (
+              <button
+                type="button"
+                onClick={() => setConfirming(i.id)}
+                aria-label={`Delete income ${formatMoney(i.amount, currency)} ${label} on ${shortDate(i.date)}`}
+                className="grid size-8 shrink-0 place-items-center rounded-control text-faint transition-colors hover:bg-danger/10 hover:text-danger"
+              >
+                <svg aria-hidden="true" viewBox="0 0 24 24" className="size-4" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+                  <path d="M4 7h16M10 11v6M14 11v6M6 7l1 12a2 2 0 0 0 2 2h6a2 2 0 0 0 2-2l1-12M9 7V4h6v3" />
+                </svg>
+              </button>
+            )}
+          </li>
+        );
+      })}
     </ul>
   );
 }
