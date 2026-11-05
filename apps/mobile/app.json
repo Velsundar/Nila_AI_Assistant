@@ -62,8 +62,7 @@
         "expo-image-picker",
         {
           "photosPermission": "Nila reads a receipt photo you pick so it can prefill an expense for you to confirm.",
-          "cameraPermission": "Nila uses the camera to scan receipts so it can prefill an expense for you to confirm.",
-          "microphonePermission": false
+          "cameraPermission": "Nila uses the camera to scan receipts so it can prefill an expense for you to confirm."
         }
       ],
       [
