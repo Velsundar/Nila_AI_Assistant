@@ -229,3 +229,20 @@ apps/web (Next.js)     apps/mobile (Expo)
   - Bug: `e1b5f20` was committed mid-edit and had a stray line at the top of mobile `wake.ts` (mobile typecheck failed). Fixed. All green after: typecheck all 4 packages, API 206/206, mobile voice logic 65/65.
   - `npx expo lint` installs ESLint on first run (package.json + lockfile + `eslint.config.js`). I backed that out. It reports 28 pre-existing errors (refs during render, setState in effects, unescaped quotes), so it's a backlog item.
 - **Render:** repo `Velsundar/Nila_AI_Assistant` is **private**, so "Public Git Repository" clones fail (`could not read Username`). Render's GitHub connection shows "No repositories found" even after granting All repositories on GitHub. Next: uninstall the Render app on GitHub, reinstall it via Render's GitHub button (popups allowed), or check Account Settings → Git Providers. There is no `render.yaml`, so use New → Web Service, not Blueprint.
+
+## 2026-11-05 — Deployed to Render; income (money received)
+
+- **Render:** live at https://nila-ai-assistant.onrender.com (`/api/health` ok; demo login and a Groq reply verified against Atlas). The repo was made public (full-history scan first: no Groq key, Atlas password or real JWT secret ever committed). Settings: build `npm install -g pnpm@11.3.0 && pnpm install --frozen-lockfile`, start `pnpm --filter @nova/api start`, health `/api/health`, env `NODE_ENV=production NODE_VERSION=22 MONGODB_URI JWT_SECRET LLM_PROVIDER=groq LLM_API_KEY LLM_MODEL CORS_ORIGINS` (no PORT). Public-URL services don't auto-deploy: use Manual Deploy, or a deploy hook + GitHub Action (offered, not done).
+- **Fixes for the deploy (`0c96b83`):** `tsx` moved to API dependencies (production installs skip devDependencies), and `packageManager: pnpm@11.3.0`. `eas.json` now points at the live URL (`ed0331e`).
+- **Bug:** "75k incoming salary credited" was saved as a ₹75,000 *expense*, because the assistant only had `addExpense`.
+- **Income (`2e3ed49` API/shared, `4e71027` mobile, `5525da5` web).** Two parallel agents built the UI (web-income, mobile-income).
+  - Separate `incomes` collection, `/api/income` CRUD + `/summary`, and `api.income.*`. Categories: Salary, Business, Refund, Gift, Transfer, Interest, Other.
+  - The `manageIncome` agent tool (add/list/summary/delete, with delete confirmed). The prompt sends money received to it, and the mock brain parses "received / credited / X gave me".
+  - Spending totals, budgets, the briefing and reports are unchanged.
+  - Real Groq check on a local scratch DB: salary → income, "Ravi gave me 500" → income (payer ends up in the note), "spent 200 on auto" → expense, "how much did I receive and spend" → both totals.
+  - The tool-schema size cap went from 5,500 to 6,000 chars (~150 tokens per call).
+  - Web: Received / Net tiles, Money in list, Add income form. Income requests fail soft. Mobile: the same on the Expenses tab, plus AddIncomeSheet. Neither UI has been viewed on a real screen yet.
+  - The misrecorded ₹75,000 had already been deleted from Atlas before the fix, so there was nothing to migrate.
+  - Tests: API 216/216, mobile voice 65/65, typecheck clean.
+- **Git:** the working tree had a blanket `git rm -r --cached .` staged. Re-adding was verified to produce an identical tree, then it was unstaged with `git reset` (no file changes).
+- **Open:** Vercel deploy for web (`NEXT_PUBLIC_API_URL=https://nila-ai-assistant.onrender.com`, then add the Vercel URL to Render `CORS_ORIGINS`); EAS APK; income in the daily briefing / weekly report; date field on mobile add-income; 28 pre-existing mobile lint errors.
