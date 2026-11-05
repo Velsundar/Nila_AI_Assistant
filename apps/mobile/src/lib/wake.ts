@@ -1,13 +1,18 @@
+  if (ALIASES[name]?.has(candidate)) return true;
 /**
  * Fuzzy "Hey <assistantName>" detection for the wake-word listener.
  *
- * Speech recognizers often mangle short names ("Nila" → "noah", "nover", "no va"), so we
+ * Speech recognizers often mangle short names ("Nila" → "neela", "nyla", "nee la"), so we
  * accept a small edit distance on the name, and require a greeting before it ("hey", "hi",
  * "ok", "okay", "hello", "yo") to keep false positives low. Any words after the name are
  * returned as the command, so "Hey Nila add milk to my shopping list" is handled in one go.
  */
 
 const GREETINGS = new Set(["hey", "hi", "hay", "ok", "okay", "hello", "hallo", "yo", "ey"]);
+// Frequent mishearings of the default name, spaces removed (the caller joins split words).
+const ALIASES: Record<string, Set<string>> = {
+  nila: new Set(["neela", "nela", "nilla", "neila", "nyla", "nilah", "neelah", "kneela"]),
+};
 
 function normalize(text: string): string[] {
   return text

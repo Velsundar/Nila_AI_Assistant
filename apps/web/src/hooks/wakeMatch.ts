@@ -1,8 +1,11 @@
 /** Fuzzy "Hey <name>" detection for wake-word transcripts. Pure, so it's easy to reason about. */
 
 const GREETINGS = new Set(["hey", "hay", "hei", "heyy", "hi", "hai", "hello", "ok", "okay", "a", "he", "hell"]);
-// Frequent Chrome mishearings of the default name.
-const NOVA_ALIASES = new Set(["nova", "nova", "nava", "novah", "noah", "nora", "nowa", "nover", "novak", "no va", "know va"]);
+// Frequent Chrome mishearings of the default name (and of "Nova", the name before the rename).
+const ALIASES: Record<string, Set<string>> = {
+  nila: new Set(["neela", "nela", "nilla", "neila", "nyla", "nilah", "neelah", "knee la", "nee la", "kneel a", "nil a"]),
+  nova: new Set(["nova", "nova", "nava", "novah", "noah", "nora", "nowa", "nover", "novak", "no va", "know va"]),
+};
 
 export function normalize(s: string) {
   return s
@@ -33,7 +36,7 @@ function levenshtein(a: string, b: string) {
 function similar(heard: string, name: string) {
   const h = heard.replace(/'/g, "");
   if (h === name) return true;
-  if (name === "nova" && NOVA_ALIASES.has(heard)) return true;
+  if (ALIASES[name]?.has(heard)) return true;
   const tol = name.length <= 4 ? 1 : name.length <= 7 ? 2 : 3;
   return levenshtein(h.replace(/\s/g, ""), name.replace(/\s/g, "")) <= tol;
 }
@@ -44,7 +47,7 @@ function similar(heard: string, name: string) {
  */
 export function matchWakePhrase(transcript: string, assistantName: string): string | null {
   const words = normalize(transcript).split(" ").filter(Boolean);
-  const name = normalize(assistantName) || "nova";
+  const name = normalize(assistantName) || "nila";
   const nameLen = name.split(" ").length;
   for (let i = 0; i < words.length; i++) {
     const greeted = GREETINGS.has(words[i]);

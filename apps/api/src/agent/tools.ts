@@ -164,7 +164,7 @@ export function looksLikeInstruction(fact: string): boolean {
   return [
     /\b(ignore|disregard|override|bypass|forget)\b[^.]*\b(instructions?|rules?|prompt|previous|above|guidelines?|confirm\w*)\b/,
     /\b(system prompt|developer message|jailbreak|act as|pretend (to be|you)|you are now|new instructions?)\b/,
-    /\b(you|assistant|nova)\s+(must|should|shall|will)\s+(always|never|now)?\s*(call|run|use|delete|remove|erase|execute|send|transfer|ignore|skip|stop asking)\b/,
+    /\b(you|assistant|nila|nova)\s+(must|should|shall|will)\s+(always|never|now)?\s*(call|run|use|delete|remove|erase|execute|send|transfer|ignore|skip|stop asking)\b/,
     /\b(always|never|automatically)\s+(call|run|use|delete|remove|erase|execute|confirm|ask|say yes)\b/,
     /\b(without|skip(ping)?|no)\s+(asking|confirmation|confirming)\b/,
     /\b(delete|remove|erase|wipe)\s+(all|every(thing)?|my (entire|whole))\b/,
