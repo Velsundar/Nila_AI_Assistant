@@ -10,5 +10,8 @@
     "typecheck": "pnpm -r typecheck",
     "test": "pnpm -r test"
   },
-  "engines": { "node": ">=20" }
+  "engines": {
+    "node": ">=20"
+  },
+  "packageManager": "pnpm@11.3.0"
 }

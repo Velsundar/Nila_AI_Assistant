@@ -40,6 +40,9 @@ importers:
       tesseract.js:
         specifier: ^7.0.0
         version: 7.0.0
+      tsx:
+        specifier: ^4.19.2
+        version: 4.23.15
       zod:
         specifier: ^3.24.1
         version: 3.25.76
@@ -68,9 +71,6 @@ importers:
       supertest:
         specifier: ^7.0.0
         version: 7.3.1
-      tsx:
-        specifier: ^4.19.2
-        version: 4.23.15
       typescript:
         specifier: ^5.7.2
         version: 5.9.3
