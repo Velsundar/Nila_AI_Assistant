@@ -1,4 +1,3 @@
-  if (ALIASES[name]?.has(candidate)) return true;
 /**
  * Fuzzy "Hey <assistantName>" detection for the wake-word listener.
  *
@@ -40,6 +39,7 @@ export function levenshtein(a: string, b: string): number {
 function nameMatches(candidate: string, name: string): boolean {
   if (!candidate || !name) return false;
   if (candidate === name) return true;
+  if (ALIASES[name]?.has(candidate)) return true;
   // 1 edit for very short names, 2 for typical ones, 3 for long ones. Beyond 1 edit the first
   // letter must match ("noah" ≈ "nova", but not "cobra").
   const allowed = name.length <= 3 ? 1 : name.length <= 7 ? 2 : 3;

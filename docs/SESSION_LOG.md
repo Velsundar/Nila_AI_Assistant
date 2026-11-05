@@ -218,3 +218,14 @@ apps/web (Next.js)     apps/mobile (Expo)
 - Checked with a scratch script: the 4 real echo transcripts are now ignored, and 7 genuine interruptions still go through. Web typecheck is clean.
 - Not changed: mobile `lib/echo.ts` already handles curly apostrophes; fuzzy matching there is a possible follow-up.
 - **Still true:** speakers plus voice barge-in is inherently leaky. Headphones avoid it entirely, and Settings → interrupt by voice can be turned off (tapping the mic always works).
+
+## 2026-11-05 — Renamed Nova → Nila; Render deploy blocked on GitHub access
+
+- **Rename (user commits `234c680`, `e1b5f20`; fix in the commit adding this entry):**
+  - Every user-facing "Nova" is now "Nila": web title/header, mobile app name and permission prompts, UI and error strings, the default `ASSISTANT_NAME` (`packages/shared/src/schemas.ts`), README/API docs, test fixtures.
+  - Wake word "Hey Nila": `apps/web/src/hooks/wakeMatch.ts` and `apps/mobile/src/lib/wake.ts` accept common mishearings (neela, nela, nilla, neila, nyla, nilah, "nee la", …). Web keeps the old Nova aliases for accounts still named Nova. Spot check: 10/10 (including "hey villa" / "vanilla latte" rejected). The API's confirmation filler and the memory-injection filter also know "nila".
+  - Atlas: the one user with `assistantName: "Nova"` (the demo) was updated to "Nila". Custom names are untouched.
+  - **Kept on purpose (renaming would break things or lose data):** the `@nova/*` workspace package names, the Atlas/local database name `nova`, `nova.*` storage keys (renaming logs users out and resets prefs), cache names, the Expo slug/scheme/bundle id `app.nova.mobile` (linked to the EAS project), and the `demo@nova.app` demo login.
+  - Bug: `e1b5f20` was committed mid-edit and had a stray line at the top of mobile `wake.ts` (mobile typecheck failed). Fixed. All green after: typecheck all 4 packages, API 206/206, mobile voice logic 65/65.
+  - `npx expo lint` installs ESLint on first run (package.json + lockfile + `eslint.config.js`). I backed that out. It reports 28 pre-existing errors (refs during render, setState in effects, unescaped quotes), so it's a backlog item.
+- **Render:** repo `Velsundar/Nila_AI_Assistant` is **private**, so "Public Git Repository" clones fail (`could not read Username`). Render's GitHub connection shows "No repositories found" even after granting All repositories on GitHub. Next: uninstall the Render app on GitHub, reinstall it via Render's GitHub button (popups allowed), or check Account Settings → Git Providers. There is no `render.yaml`, so use New → Web Service, not Blueprint.
