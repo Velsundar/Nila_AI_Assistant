@@ -21,7 +21,7 @@ export type VoicePrefs = {
   engine: VoiceEngine;
   /** Natural voice id from GET /api/speak/voices, or "" for the server default. */
   naturalVoice: string;
-  /** While Nova is speaking, keep listening so the user can interrupt by talking (Chrome/Edge). */
+  /** While Nila is speaking, keep listening so the user can interrupt by talking (Chrome/Edge). */
   bargeIn: boolean;
 };
 

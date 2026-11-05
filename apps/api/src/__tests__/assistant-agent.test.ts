@@ -5,7 +5,7 @@ import { addDays, localDateString } from "../services/dates";
 import { setWeatherFetch } from "../services/weather";
 
 const TZ = "Asia/Kolkata";
-const ctx = { timezone: TZ, now: new Date(), userName: "Asha", assistantName: "Nova", currency: "INR", memories: [] };
+const ctx = { timezone: TZ, now: new Date(), userName: "Asha", assistantName: "Nila", currency: "INR", memories: [] };
 const today = () => localDateString(new Date(), TZ);
 const titles = async (auth: Record<string, string>, q = "") =>
   (await api().get(`/api/tasks${q}`).set(auth)).body.tasks.map((t: { title: string; done: boolean }) => `${t.title}${t.done ? " (done)" : ""}`);

@@ -1,10 +1,10 @@
 /**
  * Fuzzy "Hey <assistantName>" detection for the wake-word listener.
  *
- * Speech recognizers often mangle short names ("Nova" → "noah", "nover", "no va"), so we
+ * Speech recognizers often mangle short names ("Nila" → "noah", "nover", "no va"), so we
  * accept a small edit distance on the name, and require a greeting before it ("hey", "hi",
  * "ok", "okay", "hello", "yo") to keep false positives low. Any words after the name are
- * returned as the command, so "Hey Nova add milk to my shopping list" is handled in one go.
+ * returned as the command, so "Hey Nila add milk to my shopping list" is handled in one go.
  */
 
 const GREETINGS = new Set(["hey", "hi", "hay", "ok", "okay", "hello", "hallo", "yo", "ey"]);
@@ -47,7 +47,7 @@ export type WakeMatch = { matched: true; command: string } | { matched: false };
 
 /**
  * @param transcript what the recognizer heard
- * @param assistantName e.g. "Nova" (may be multi-word, e.g. "Captain Nova")
+ * @param assistantName e.g. "Nila" (may be multi-word, e.g. "Captain Nila")
  */
 export function matchWakeWord(transcript: string, assistantName: string): WakeMatch {
   const words = normalize(transcript);
@@ -57,7 +57,7 @@ export function matchWakeWord(transcript: string, assistantName: string): WakeMa
   const n = nameWords.length;
 
   for (let i = 0; i < words.length; i++) {
-    // Greeting + name as separate words, or glued ("heynova").
+    // Greeting + name as separate words, or glued ("heynila").
     const glued = words[i];
     for (const g of GREETINGS) {
       if (glued.startsWith(g) && glued.length > g.length && nameMatches(glued.slice(g.length), name)) {

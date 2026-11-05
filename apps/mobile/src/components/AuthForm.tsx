@@ -1,6 +1,7 @@
 import { Link } from "expo-router";
 import { useRef, useState } from "react";
 import {
+  Image,
   KeyboardAvoidingView,
   Platform,
   ScrollView,
@@ -12,7 +13,6 @@ import {
 import { SafeAreaView } from "react-native-safe-area-context";
 import { ASSISTANT_NAME, LoginSchema, RegisterSchema } from "@nova/shared";
 
-import { Orb } from "@/components/Orb";
 import { Banner, Button, TextField } from "@/components/ui";
 import { Colors, Font, Spacing } from "@/constants/theme";
 import { API_BASE_URL, API_CONFIG_ERROR, errorMessage } from "@/lib/api";
@@ -58,7 +58,7 @@ export function AuthForm({ mode }: { mode: "login" | "register" }) {
       <KeyboardAvoidingView style={styles.flex} behavior={Platform.OS === "ios" ? "padding" : undefined}>
         <ScrollView contentContainerStyle={styles.scroll} keyboardShouldPersistTaps="handled">
           <View style={styles.hero}>
-            <Orb state="idle" size={140} />
+            <Image source={require("../../assets/icon.png")} style={styles.logo} accessibilityIgnoresInvertColors />
             <Text style={styles.title} accessibilityRole="header">
               {ASSISTANT_NAME}
             </Text>
@@ -141,6 +141,7 @@ const styles = StyleSheet.create({
   flex: { flex: 1 },
   scroll: { flexGrow: 1, padding: Spacing.xl, justifyContent: "center", gap: Spacing.xl, maxWidth: 480, width: "100%", alignSelf: "center" },
   hero: { alignItems: "center", gap: Spacing.sm },
+  logo: { width: 112, height: 112, borderRadius: 26 },
   title: { color: Colors.text, ...Font.title, letterSpacing: 6, marginTop: Spacing.md },
   subtitle: { color: Colors.textDim, ...Font.body, textAlign: "center" },
   form: { gap: Spacing.lg },

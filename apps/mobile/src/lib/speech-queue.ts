@@ -75,21 +75,21 @@ export function naturalFailurePolicy(e: unknown, now: number, describe: (e: unkn
       kind: "limit",
       text:
         e.code === "DAILY_LIMIT"
-          ? `Today's free AI voice quota is used up, so Nova is using your phone's voice${until}.`
-          : `The natural voice hit the free tier's rate limit, so Nova is using your phone's voice${until}.`,
+          ? `Today's free AI voice quota is used up, so Nila is using your phone's voice${until}.`
+          : `The natural voice hit the free tier's rate limit, so Nila is using your phone's voice${until}.`,
     };
   }
   if (isApi(e) && (e.status === 503 || e.code === "TTS_UNAVAILABLE")) {
     return {
       downUntil: Infinity,
       kind: "unavailable",
-      text: "The natural voice isn't available on the server right now, so Nova is using your phone's voice.",
+      text: "The natural voice isn't available on the server right now, so Nila is using your phone's voice.",
     };
   }
   // 502 TTS_FAILED, 504 TTS_TIMEOUT, other HTTP errors, network: this reply falls back; retry later.
   return {
     downUntil: now + 30_000,
     kind: "other",
-    text: `The natural voice didn't answer (${describe(e)}), so Nova finished with your phone's voice.`,
+    text: `The natural voice didn't answer (${describe(e)}), so Nila finished with your phone's voice.`,
   };
 }

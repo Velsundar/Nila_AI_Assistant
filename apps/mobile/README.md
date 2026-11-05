@@ -1,4 +1,4 @@
-# @nova/mobile — Nova for Android & iOS
+# @nova/mobile — Nila for Android & iOS
 
 Expo (SDK 58, React Native 0.88) + expo-router + TypeScript. Talks to `apps/api` through the typed
 client in `@nova/shared`. No paid services: speech is on-device where possible, and otherwise uses
@@ -21,17 +21,17 @@ the API's free server-side speech-to-text (`POST /api/transcribe`).
 | If the API has no STT key (`503 STT_UNAVAILABLE`) | Voice switches off with a notice; type instead | On-device STT unaffected |
 | Spoken replies, phone voice (`expo-speech`) | ✅ | ✅ |
 | **Natural voice (AI)** (Groq Orpheus via `POST /api/speak`, played with `expo-audio`) | ✅ | ✅ |
-| **Interrupt by tapping** the orb or mic while Nova talks/thinks (stop → "Mm-hmm." → listen) | ✅ | ✅ |
-| **Interrupt by voice** (just talk over Nova) | ❌ hidden, Settings explains why (needs the native recognizer) | ✅ opt-in (Settings → Hands-free) |
+| **Interrupt by tapping** the orb or mic while Nila talks/thinks (stop → "Mm-hmm." → listen) | ✅ | ✅ |
+| **Interrupt by voice** (just talk over Nila) | ❌ hidden, Settings explains why (needs the native recognizer) | ✅ opt-in (Settings → Hands-free) |
 | Wake word "Hey <name>" | ❌ hidden, Settings explains why (needs the native recognizer) | ✅ opt-in |
 | Receipt scanning (`expo-image-picker` + `expo-image-manipulator`) | ✅ | ✅ |
-| Weekly report notification (local, `expo-notifications`) | ✅ local scheduled notifications work in Expo Go on iOS and Android. Remote *push* is not in Expo Go on Android since SDK 53, but Nova doesn't use push. Expect a one-time "expo-notifications is not fully supported in Expo Go" console warning. | ✅ |
+| Weekly report notification (local, `expo-notifications`) | ✅ local scheduled notifications work in Expo Go on iOS and Android. Remote *push* is not in Expo Go on Android since SDK 53, but Nila doesn't use push. Expect a one-time "expo-notifications is not fully supported in Expo Go" console warning. | ✅ |
 
 ## v3: natural voice + interruptions
 
 **Natural voice (optional, Settings → Voice engine).** "Phone voice" (default) or "Natural voice (AI)".
 Picking Natural checks `GET /api/speak/voices`: if it's unavailable, Settings shows why (for
-`TERMS_REQUIRED`, a link to accept the Orpheus terms at console.groq.com) and Nova keeps using the
+`TERMS_REQUIRED`, a link to accept the Orpheus terms at console.groq.com) and Nila keeps using the
 phone voice. Otherwise you pick a voice (female first; `autumn` is the server default) and can test it.
 It costs requests from the free tier, which is **about 100 spoken replies per day for the whole Groq
 account**, so the engine is frugal:
@@ -43,7 +43,7 @@ account**, so the engine is frugal:
   16 MB, index persisted across restarts) is keyed by voice + text, and evicted files are deleted.
 - **Fallback:** on any non-200 (503 `TTS_UNAVAILABLE`, 429 `TTS_RATE_LIMITED`/`DAILY_LIMIT`, 502
   `TTS_FAILED`, 504 `TTS_TIMEOUT`) or a network error, the rest of that reply is spoken with the phone
-  voice and a one-time banner explains why. After a 429, Nova stays on the phone voice until
+  voice and a one-time banner explains why. After a 429, Nila stays on the phone voice until
   `details.retryAfter` passes (or for the rest of the session), with no per-chunk retries. A 503 means
   the rest of the session. Other errors mean "try again in 30 s".
 - Audio mode: `playsInSilentMode` (audible with the iOS silent switch on), loudspeaker (not
@@ -54,31 +54,31 @@ account**, so the engine is frugal:
   built-in speaking animation.
 - Briefing/report read-alouds on the Today/Expenses tabs use the same engine.
 
-**Interrupting Nova ("barge-in").** While Nova is **speaking** or **thinking**, press or hold the
-mic or tap the orb. All audio stops at once, Nova says a short acknowledgement (rotating through
+**Interrupting Nila ("barge-in").** While Nila is **speaking** or **thinking**, press or hold the
+mic or tap the orb. All audio stops at once, Nila says a short acknowledgement (rotating through
 "Mm-hmm." / "Okay." / "Ah, got it." / "Sure."), and it listens for your next question, with a
 haptic tick.
 - The interrupted reply stays in the chat in full, marked *Stopped speaking*.
-- If Nova was still **thinking**, that request is not cancelled. When it arrives, its text and action
+- If Nila was still **thinking**, that request is not cancelled. When it arrives, its text and action
   chips are shown, marked *Answered while you asked something else*, and it is **not** spoken. Then
   your new question is sent. Requests run strictly one at a time, in order, and are never dropped
-  (`src/lib/turns.ts`). Typed messages sent while Nova is busy queue the same way.
+  (`src/lib/turns.ts`). Typed messages sent while Nila is busy queue the same way.
 - With the natural voice selected, the 4 acknowledgement clips are fetched **once** (when the
   Assistant opens), pinned in the file cache and reused across restarts, so they play instantly.
   Until then, and with the phone voice, the phone voice says them.
-- If Nova is asking a **yes/no confirmation**, an interrupt only stops the audio. The Yes/No buttons
+- If Nila is asking a **yes/no confirmation**, an interrupt only stops the audio. The Yes/No buttons
   stay. A spoken "yes"/"no" heard by voice barge-in is sent as the answer, without an ack.
 
-**Interrupt by voice (dev build only, off by default).** While Nova speaks, the app keeps
+**Interrupt by voice (dev build only, off by default).** While Nila speaks, the app keeps
 short on-device recognition sessions running (the wake-word machinery, which otherwise pauses
 during speech). On iOS these use `iosCategory: playAndRecord + defaultToSpeaker + allowBluetooth`
 (mode `default`) and `iosVoiceProcessingEnabled` (Apple's echo cancellation, which can lower playback
 volume a little). expo-speech-recognition has no echo-cancellation switch on Android, so there the
 filter does all the work. **Echo filter** (`src/lib/echo.ts`): transcripts under 2 words are
-ignored, and so are transcripts where ≥ 60% of the words are what Nova is saying (current chunk + whole
+ignored, and so are transcripts where ≥ 60% of the words are what Nila is saying (current chunk + whole
 reply), unless they end in ≥ 3 words of the user's own ("…twelve hundred left what is the weather
-tomorrow" → "what is the weather tomorrow"). Three of the user's own words in an interim result stop Nova
-at once, and the final transcript becomes the new question. A wake phrase ("Hey Nova, …") at the
+tomorrow" → "what is the weather tomorrow"). Three of the user's own words in an interim result stop Nila
+at once, and the final transcript becomes the new question. A wake phrase ("Hey Nila, …") at the
 start is stripped. Not yet tried on a real device: echo filtering on a phone loudspeaker without
 AEC (Android) may miss or over-trigger in loud rooms. It's opt-in for that reason. Headphones make it
 reliable.
@@ -94,10 +94,10 @@ end to end against the live API: a macOS `say` + `afconvert` m4a came back as
 
 **Wake word details (dev build).** When it's on, the assistant runs short back-to-back on-device
 recognition sessions, but only while the Assistant tab is focused, the app is in the foreground
-(AppState) and Nova isn't talking or thinking. It stops on blur or background and restarts after TTS
+(AppState) and Nila isn't talking or thinking. It stops on blur or background and restarts after TTS
 ends. Matching is fuzzy: a greeting ("hey", "hi", "ok", "hello"…) plus your assistant's name within
-a small edit distance, so "hey noah" or "hey no va" match "Nova". If the command is in the same
-breath ("Hey Nova, add bread to my shopping list") it's sent straight away; "Hey Nova" alone starts
+a small edit distance, so "hey noah" or "hey no va" match "Nila". If the command is in the same
+breath ("Hey Nila, add bread to my shopping list") it's sent straight away; "Hey Nila" alone starts
 a normal listening turn. On Android each session may play the system "listening" chime, and it uses
 more battery, which is why it's off by default.
 

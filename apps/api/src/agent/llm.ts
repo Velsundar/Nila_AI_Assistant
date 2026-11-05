@@ -195,7 +195,7 @@ export function createOpenAiCompatLlm(opts: OpenAiCompatOptions): LlmClient {
     if (opts.apiKey) headers.Authorization = `Bearer ${opts.apiKey}`;
     if (opts.provider === "openrouter") {
       headers["HTTP-Referer"] = "http://localhost:3000";
-      headers["X-Title"] = "Nova";
+      headers["X-Title"] = "Nila";
     }
     const body = {
       model: useModel,

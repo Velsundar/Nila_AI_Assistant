@@ -82,7 +82,7 @@ export default function AssistantScreen() {
   const [captions, setCaptions] = useState<Caption[]>([]);
   const [draft, setDraft] = useState("");
   const [sending, setSending] = useState(false);
-  /** Questions waiting behind the in-flight request (asked while Nova was thinking). */
+  /** Questions waiting behind the in-flight request (asked while Nila was thinking). */
   const [queued, setQueued] = useState<string[]>([]);
   const [pending, setPending] = useState<{ summary: string } | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
@@ -97,7 +97,7 @@ export default function AssistantScreen() {
   speakRepliesRef.current = speakReplies;
   const pendingRef = useRef(pending);
   pendingRef.current = pending;
-  /** Caption Nova is reading aloud right now (gets a "Stopped speaking" marker if cut off). */
+  /** Caption Nila is reading aloud right now (gets a "Stopped speaking" marker if cut off). */
   const speakingCaption = useRef<number | null>(null);
   /** An ack is playing and listening starts when it ends. */
   const ackThenListenPending = useRef(false);
@@ -231,7 +231,7 @@ export default function AssistantScreen() {
   }, []);
 
   /**
-   * Interrupt by action (mic press/hold, orb tap) while Nova is speaking or thinking. Returns false
+   * Interrupt by action (mic press/hold, orb tap) while Nila is speaking or thinking. Returns false
    * when there was nothing to interrupt.
    */
   const interruptByAction = useCallback((): boolean => {
@@ -241,7 +241,7 @@ export default function AssistantScreen() {
     void Haptics.selectionAsync().catch(() => {});
     haltSpeech();
     if (thinking) turns.interrupt(); // not cancelled: its answer is shown (unspoken) when it lands
-    // Nova was asking a yes/no confirmation: only stop the audio; the buttons stay.
+    // Nila was asking a yes/no confirmation: only stop the audio; the buttons stay.
     if (pendingRef.current && !thinking) return true;
     if (!v?.available) {
       playAck();
@@ -259,7 +259,7 @@ export default function AssistantScreen() {
       if (wakeWord) {
         const m = matchWakeWord(text, assistantName);
         if (m.matched && m.command.length < 2) {
-          // Just "Hey Nova": stop and listen.
+          // Just "Hey Nila": stop and listen.
           haltSpeech();
           void Haptics.selectionAsync().catch(() => {});
           ackThenListen();

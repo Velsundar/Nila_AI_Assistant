@@ -1,6 +1,6 @@
 {
   "expo": {
-    "name": "Nova",
+    "name": "Nila",
     "slug": "nova",
     "version": "0.1.0",
     "orientation": "portrait",
@@ -12,13 +12,13 @@
       "supportsTablet": true,
       "bundleIdentifier": "app.nova.mobile",
       "infoPlist": {
-        "NSMicrophoneUsageDescription": "Nova listens to your voice so you can log expenses and ask questions hands-free.",
-        "NSSpeechRecognitionUsageDescription": "Nova uses on-device speech recognition to turn what you say into text.",
+        "NSMicrophoneUsageDescription": "Nila listens to your voice so you can log expenses and ask questions hands-free.",
+        "NSSpeechRecognitionUsageDescription": "Nila uses on-device speech recognition to turn what you say into text.",
         "NSAppTransportSecurity": {
           "NSAllowsLocalNetworking": true
         },
-        "NSCameraUsageDescription": "Nova uses the camera to scan receipts so it can prefill an expense for you to confirm.",
-        "NSPhotoLibraryUsageDescription": "Nova reads a receipt photo you pick so it can prefill an expense for you to confirm."
+        "NSCameraUsageDescription": "Nila uses the camera to scan receipts so it can prefill an expense for you to confirm.",
+        "NSPhotoLibraryUsageDescription": "Nila reads a receipt photo you pick so it can prefill an expense for you to confirm."
       }
     },
     "android": {
@@ -44,8 +44,8 @@
       [
         "expo-speech-recognition",
         {
-          "microphonePermission": "Nova listens to your voice so you can log expenses and ask questions hands-free.",
-          "speechRecognitionPermission": "Nova uses on-device speech recognition to turn what you say into text.",
+          "microphonePermission": "Nila listens to your voice so you can log expenses and ask questions hands-free.",
+          "speechRecognitionPermission": "Nila uses on-device speech recognition to turn what you say into text.",
           "androidSpeechServicePackages": [
             "com.google.android.googlequicksearchbox"
           ]
@@ -54,15 +54,15 @@
       [
         "expo-audio",
         {
-          "microphonePermission": "Nova listens to your voice so you can log expenses and ask questions hands-free.",
+          "microphonePermission": "Nila listens to your voice so you can log expenses and ask questions hands-free.",
           "recordAudioAndroid": true
         }
       ],
       [
         "expo-image-picker",
         {
-          "photosPermission": "Nova reads a receipt photo you pick so it can prefill an expense for you to confirm.",
-          "cameraPermission": "Nova uses the camera to scan receipts so it can prefill an expense for you to confirm.",
+          "photosPermission": "Nila reads a receipt photo you pick so it can prefill an expense for you to confirm.",
+          "cameraPermission": "Nila uses the camera to scan receipts so it can prefill an expense for you to confirm.",
           "microphonePermission": false
         }
       ],

@@ -40,7 +40,7 @@ function similar(heard: string, name: string) {
 
 /**
  * If `transcript` contains "hey <name>" (fuzzy), returns the words after it (possibly ""),
- * otherwise null. "hey nova what's the weather" → "what's the weather".
+ * otherwise null. "hey nila what's the weather" → "what's the weather".
  */
 export function matchWakePhrase(transcript: string, assistantName: string): string | null {
   const words = normalize(transcript).split(" ").filter(Boolean);
@@ -53,7 +53,7 @@ export function matchWakePhrase(transcript: string, assistantName: string): stri
       const start = greeted ? i + 1 : i;
       if (start + n > words.length) continue;
       const heard = words.slice(start, start + n).join(" ");
-      // Without a greeting word only accept an exact name at the very start ("nova, what's…").
+      // Without a greeting word only accept an exact name at the very start ("nila, what's…").
       const ok = greeted ? similar(heard, name) : i === 0 && heard.replace(/\s/g, "") === name.replace(/\s/g, "");
       if (ok) return words.slice(start + n).join(" ");
     }

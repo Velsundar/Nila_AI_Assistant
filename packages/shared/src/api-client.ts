@@ -52,7 +52,7 @@ export type ApiClientOptions = {
   onUnauthorized?: () => void;
 };
 
-/** Typed client for the Nova REST API. Shared by web (Next.js) and mobile (Expo). */
+/** Typed client for the Nila REST API. Shared by web (Next.js) and mobile (Expo). */
 /** The device's IANA timezone, so "today" and "this month" match the user's clock. */
 function deviceTimezone(): string | undefined {
   try {

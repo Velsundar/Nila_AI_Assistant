@@ -69,7 +69,7 @@ const RECOGNITION_ERRORS: Record<RecognitionError, string> = {
 
 export default function AssistantPage() {
   const { user } = useAuth();
-  const name = user?.assistantName || "Nova";
+  const name = user?.assistantName || "Nila";
   const currency = user?.currency || "INR";
   const [prefs, setPrefs] = useVoicePrefs();
 
@@ -144,7 +144,7 @@ export default function AssistantPage() {
   }, []);
 
   /**
-   * Barge-in: called when the user presses the mic / holds Space / taps the orb / talks over Nova.
+   * Barge-in: called when the user presses the mic / holds Space / taps the orb / talks over Nila.
    * Stops all audio at once, says a short rotating acknowledgement, and (if a request is in
    * flight) marks its answer as "late" so it's shown but not spoken. Returns whether anything
    * was interrupted. During a Yes/No confirmation it only stops the audio (no ack).
@@ -406,8 +406,8 @@ export default function AssistantPage() {
   };
 
   // ---- Wake word: "Hey <name>" while this page is open + visible, paused while busy or speaking.
-  // ---- Interrupt by voice: while Nova speaks, keep a recognizer running; anything that isn't an
-  // echo of Nova's own words (or a stray word) interrupts. Chrome/Edge only.
+  // ---- Interrupt by voice: while Nila speaks, keep a recognizer running; anything that isn't an
+  // echo of Nila's own words (or a stray word) interrupts. Chrome/Edge only.
   const [bargePending, setBargePending] = useState(false);
   const bargeTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const replyTextRef = useRef("");
@@ -420,7 +420,7 @@ export default function AssistantPage() {
     trailingMs: 1200,
     match: (heard) => {
       // Compare with the whole reply (recognition lags playback by a chunk or more) plus the
-      // chunk being spoken; the acks count as Nova's own words too.
+      // chunk being spoken; the acks count as Nila's own words too.
       const said = `${replyTextRef.current} ${ttsRef.current.spokenRef.current} ${INTERRUPT_ACKS.join(" ")}`;
       return isLikelyEcho(heard, said) ? null : heard;
     },

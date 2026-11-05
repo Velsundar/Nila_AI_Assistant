@@ -46,7 +46,7 @@ export function errorMessage(err: unknown): string {
     if (err.status === 413) return CODE_MESSAGES.PAYLOAD_TOO_LARGE;
     return err.message || `Request failed (${err.status})`;
   }
-  if (err instanceof TypeError) return `Can't reach the Nova API at ${API_URL}. Is it running?`;
+  if (err instanceof TypeError) return `Can't reach the Nila API at ${API_URL}. Is it running?`;
   if (err instanceof Error) return err.message;
   return "Something went wrong.";
 }

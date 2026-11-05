@@ -1,6 +1,6 @@
 # @nova/web
 
-The Nova web app: a voice-first expense tracker with a talking "robot orb" assistant.
+The Nila web app: a voice-first expense tracker with a talking "robot orb" assistant.
 Built with Next.js 15 (App Router), React 19, TypeScript, Tailwind CSS v4 and recharts.
 It's a client-side app that talks to the Express API (`apps/api`) with a JWT, using the typed
 `createApiClient()` from `@nova/shared`.
@@ -60,12 +60,12 @@ User text is always rendered as text (no `dangerouslySetInnerHTML`).
 | Speech-to-text | Web Speech API `SpeechRecognition` / `webkitSpeechRecognition`, `lang` `en-IN` by default, interim results | Chrome and Edge (desktop and Android), Safari 14.1+ (macOS and iOS). **Not Firefox.** |
 | Text-to-speech | `window.speechSynthesis` | All modern browsers. Voices vary by OS. |
 | Live mic level (orb reacts to your voice) | `getUserMedia` + Web Audio `AnalyserNode` | All modern browsers |
-| Wake word "Hey Nova" | Continuous `SpeechRecognition` while the assistant page is open **and visible** | Chrome and Edge only |
+| Wake word "Hey Nila" | Continuous `SpeechRecognition` while the assistant page is open **and visible** | Chrome and Edge only |
 | Server speech-to-text fallback | `MediaRecorder` (webm/opus or mp4) → base64 → `POST /transcribe` | Any browser without `SpeechRecognition` (e.g. Firefox) |
 | Receipt photos | `<input type=file accept=image/* capture>` + canvas downscale | All modern browsers (HEIC only where the browser can decode it) |
 
 Notes:
-- **Wake word:** a second recognizer listens continuously and fuzzy-matches "hey/hi/ok + <name>" (edit distance, plus common mishearings such as "hey Noah"). "Hey Nova" alone starts a normal listening turn; "Hey Nova, what's the weather" sends the command directly. It pauses while the assistant speaks, while a turn is in progress, while the tab is hidden and while the receipt dialog is open, and it restarts on `onend` (Chrome ends continuous sessions on its own) with exponential backoff on errors. Speech goes to the browser's speech service.
+- **Wake word:** a second recognizer listens continuously and fuzzy-matches "hey/hi/ok + <name>" (edit distance, plus common mishearings such as "hey Noah"). "Hey Nila" alone starts a normal listening turn; "Hey Nila, what's the weather" sends the command directly. It pauses while the assistant speaks, while a turn is in progress, while the tab is hidden and while the receipt dialog is open, and it restarts on `onend` (Chrome ends continuous sessions on its own) with exponential backoff on errors. Speech goes to the browser's speech service.
 - **Server STT fallback:** hold the mic to record (or tap to start and tap again to send, 60 s cap). `STT_UNAVAILABLE` (503) switches the page to typing with a notice; `STT_RATE_LIMITED`, `STT_BAD_AUDIO`, `STT_FAILED` and `PAYLOAD_TOO_LARGE` show a notice and keep the mic available.
 - Recognizers, recorders, audio contexts and timers are released on unmount and when the tab is hidden.
 - Chrome's recognition streams audio to Google's speech service, so it needs an internet connection. It's free and needs no key. If that service is unreachable, the app shows a `network` notice and you can type instead.

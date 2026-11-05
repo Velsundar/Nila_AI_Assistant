@@ -1,6 +1,6 @@
 # @nova/api
 
-Backend for **Nova**, the voice-first personal assistant for daily life: expenses and budgets, to-do lists, notes, reminders, weather, a daily briefing and a weekly report. Express + TypeScript (run with `tsx`), MongoDB via Mongoose 8, JWT auth, and an LLM tool-calling agent. Everything runs at ₹0: local MongoDB (or Atlas M0), and either the built-in offline "mock" brain or a free-tier LLM.
+Backend for **Nila**, the voice-first personal assistant for daily life: expenses and budgets, to-do lists, notes, reminders, weather, a daily briefing and a weekly report. Express + TypeScript (run with `tsx`), MongoDB via Mongoose 8, JWT auth, and an LLM tool-calling agent. Everything runs at ₹0: local MongoDB (or Atlas M0), and either the built-in offline "mock" brain or a free-tier LLM.
 
 The contract (routes, request/response types) lives in `packages/shared` and `docs/API.md`.
 
@@ -113,7 +113,7 @@ Groq's free tier allows about **8,000 tokens per minute per model** (and 1,000 r
    - `getWeather` (Open-Meteo, the user's city unless they name one), `getDailyBriefing`, `getWeeklyReport`
    - General questions (conversions, recipes, workouts, plans) need no tool.
 4. Each tool call's arguments are validated with Zod. Invalid arguments go back to the model as a `role: "tool"` error, and the loop continues for at most 5 iterations.
-5. All totals and budget figures come from MongoDB aggregations. `addExpense` returns the category's budget status, so Nova can say things like "you've used 82% of your Food budget".
+5. All totals and budget figures come from MongoDB aggregations. `addExpense` returns the category's budget status, so Nila can say things like "you've used 82% of your Food budget".
 6. **Destructive actions are never run directly.** These are `deleteExpense`, `updateExpense`, `manageTask`/`manageNote` delete, `manageMemory` forget, and `setBudget` when it changes an existing budget. The server works out the target and stores `pendingAction` (with `createdAt`) on the conversation. It returns `pendingConfirmation: { summary }` with a reply like "Delete ₹250 at Swiggy from today? Say yes or no."
    - **Strict yes/no:** the *whole* reply, minus punctuation, politeness ("please", "thanks") and the assistant's name, must be only yes words (yes, yeah, haan, ok, sure, confirm, do it, go ahead…) or only no words (no, nahi, cancel, don't…). "Okay, add 200 for lunch", "ok what did I spend", "okay wait, don't", "sure, actually cancel" and "yes no" are not a yes: the pending action is dropped and the message is handled as a new request.
    - **Expiry:** a pending action expires after 2 minutes.

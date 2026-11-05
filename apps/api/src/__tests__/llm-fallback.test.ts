@@ -6,7 +6,7 @@ import { ConversationModel } from "../models/Conversation";
 import { UserModel } from "../models/User";
 import { registerUser } from "../test/helpers";
 
-const ctx = { timezone: "Asia/Kolkata", now: new Date(), userName: "T", assistantName: "Nova", currency: "INR", memories: [] };
+const ctx = { timezone: "Asia/Kolkata", now: new Date(), userName: "T", assistantName: "Nila", currency: "INR", memories: [] };
 const req: ChatRequest = { messages: [{ role: "user", content: "hi" }], tools: [], context: ctx };
 
 const ok = (content = "hello") =>

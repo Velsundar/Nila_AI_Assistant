@@ -20,7 +20,7 @@ const LANGS = [
 
 export default function SettingsPage() {
   const { user, setUser } = useAuth();
-  const [assistantName, setAssistantName] = useState(user?.assistantName ?? "Nova");
+  const [assistantName, setAssistantName] = useState(user?.assistantName ?? "Nila");
   const [nameError, setNameError] = useState<string | undefined>();
   const [saved, setSaved] = useState(false);
   const [formError, setFormError] = useState<string | null>(null);
@@ -65,7 +65,7 @@ export default function SettingsPage() {
     }
   }
 
-  const name = user?.assistantName ?? "Nova";
+  const name = user?.assistantName ?? "Nila";
 
   return (
     <main className="mx-auto w-full max-w-2xl flex-1 px-4 pb-16 pt-6 sm:px-6">

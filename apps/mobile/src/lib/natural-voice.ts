@@ -149,7 +149,7 @@ export function getClip(text: string, voice: string, pin = false): Promise<strin
 
 let keepMic = false;
 /**
- * Voice barge-in keeps the recognizer running while Nova talks. On iOS that needs the
+ * Voice barge-in keeps the recognizer running while Nila talks. On iOS that needs the
  * playAndRecord category for playback too (routed to the loudspeaker, not the earpiece).
  */
 export function setPlaybackKeepsMic(on: boolean) {

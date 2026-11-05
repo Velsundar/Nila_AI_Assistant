@@ -3,7 +3,7 @@ import { z } from "zod";
 // ---------- Config ----------
 
 /** Default assistant name. Users can override it per-account (User.assistantName). */
-export const ASSISTANT_NAME = "Nova";
+export const ASSISTANT_NAME = "Nila";
 export const DEFAULT_CURRENCY = "INR";
 
 export const CATEGORIES = [

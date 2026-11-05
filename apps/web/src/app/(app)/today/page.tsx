@@ -14,7 +14,7 @@ function greeting(h: number) {
 export default function TodayPage() {
   const { user } = useAuth();
   const currency = user?.currency || "INR";
-  const name = user?.assistantName || "Nova";
+  const name = user?.assistantName || "Nila";
   // Time-of-day text only on the client so SSR markup stays stable.
   const [now, setNow] = useState<Date | null>(null);
   useEffect(() => {

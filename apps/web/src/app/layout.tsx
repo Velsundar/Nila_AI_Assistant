@@ -7,9 +7,9 @@ import "./globals.css";
 export const dynamic = "force-dynamic";
 
 export const metadata: Metadata = {
-  title: { default: "Nova", template: "%s · Nova" },
+  title: { default: "Nila", template: "%s · Nila" },
   description: "Voice-first expense tracker and personal AI assistant.",
-  icons: { icon: "/icon.svg" },
+  icons: { icon: "/logo.png", apple: "/apple-touch-icon.png" },
 };
 
 export const viewport: Viewport = {

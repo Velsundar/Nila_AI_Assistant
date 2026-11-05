@@ -6,7 +6,7 @@ async function main() {
   await connectDb();
   const app = createApp();
   const server = app.listen(config.port, () => {
-    console.log(`[api] Nova API listening on http://localhost:${config.port} (LLM provider: ${config.llm.provider})`);
+    console.log(`[api] Nila API listening on http://localhost:${config.port} (LLM provider: ${config.llm.provider})`);
   });
   const shutdown = async () => {
     server.close();

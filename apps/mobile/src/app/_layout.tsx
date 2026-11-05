@@ -28,7 +28,7 @@ function RootNavigator() {
 
   if (status === "loading") {
     return (
-      <View style={styles.splash} accessibilityLabel="Loading Nova">
+      <View style={styles.splash} accessibilityLabel="Loading Nila">
         <ActivityIndicator color={Colors.primary} size="large" />
       </View>
     );

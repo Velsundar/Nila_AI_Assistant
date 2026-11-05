@@ -1,4 +1,4 @@
-# Nova API contract (source of truth: packages/shared/src)
+# Nila API contract (source of truth: packages/shared/src)
 
 Base URL: `http://localhost:4000` (dev). All routes are under `/api`. JSON in/out.
 Auth: `Authorization: Bearer <JWT>` on everything except register/login/health.

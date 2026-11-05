@@ -19,7 +19,7 @@ function resolveBaseUrl(): { url: string; configError: string | null } {
   return {
     url: "http://localhost:4000",
     configError:
-      "This build has no API address. Rebuild it with EXPO_PUBLIC_API_URL set (e.g. in eas.json → build.<profile>.env) to your Nova API's URL.",
+      "This build has no API address. Rebuild it with EXPO_PUBLIC_API_URL set (e.g. in eas.json → build.<profile>.env) to your Nila API's URL.",
   };
 }
 
@@ -50,7 +50,7 @@ export function errorMessage(err: unknown): string {
   if (API_CONFIG_ERROR && !(err instanceof ApiError)) return API_CONFIG_ERROR;
   if (err instanceof ApiError) return err.message || `Request failed (${err.status})`;
   if (err instanceof TypeError || (err instanceof Error && /network/i.test(err.message))) {
-    return `Can't reach the Nova API at ${API_BASE_URL}. Is it running, and is your phone on the same Wi-Fi?`;
+    return `Can't reach the Nila API at ${API_BASE_URL}. Is it running, and is your phone on the same Wi-Fi?`;
   }
   if (err instanceof Error) return err.message;
   return "Something went wrong.";

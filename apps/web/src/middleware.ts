@@ -48,7 +48,7 @@ export const config = {
   // Documents only: skip static assets and prefetches.
   matcher: [
     {
-      source: "/((?!_next/static|_next/image|favicon.ico|icon.svg).*)",
+      source: "/((?!_next/static|_next/image|favicon.ico|logo.png|apple-touch-icon.png).*)",
       missing: [
         { type: "header", key: "next-router-prefetch" },
         { type: "header", key: "purpose", value: "prefetch" },

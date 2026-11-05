@@ -14,7 +14,7 @@ describe("auth", () => {
     expect(res.status).toBe(201);
     expect(typeof res.body.token).toBe("string");
     expect(UserSchema.parse(res.body.user)).toBeTruthy();
-    expect(res.body.user).toMatchObject({ name: "Asha", email: "asha@example.com", currency: "INR", assistantName: "Nova" });
+    expect(res.body.user).toMatchObject({ name: "Asha", email: "asha@example.com", currency: "INR", assistantName: "Nila" });
     const raw = JSON.stringify(res.body);
     expect(raw).not.toMatch(/passwordHash|"_id"|__v/);
   });

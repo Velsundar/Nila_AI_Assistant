@@ -1,12 +1,12 @@
 /**
- * Echo filter for voice barge-in: while Nova speaks, the microphone also hears Nova. Phone echo
- * cancellation removes much of it, but not all, so recognised text that is mostly Nova's own
+ * Echo filter for voice barge-in: while Nila speaks, the microphone also hears Nila. Phone echo
+ * cancellation removes much of it, but not all, so recognised text that is mostly Nila's own
  * words is ignored.
  *
  * Rules (pure, unit-checked in scripts/check-voice-logic.ts):
  *  - fewer than 2 words → ignore (coughs, "uh", a stray word from the speaker);
- *  - ≥ 60% of the transcript's words appear in what Nova is saying → echo, ignore;
- *  - except: if the transcript *ends* with ≥ 3 words Nova isn't saying, the user talked over the
+ *  - ≥ 60% of the transcript's words appear in what Nila is saying → echo, ignore;
+ *  - except: if the transcript *ends* with ≥ 3 words Nila isn't saying, the user talked over the
  *    echo, so that tail is the question.
  */
 
@@ -42,7 +42,7 @@ export function checkEcho(transcript: string, spoken: string | string[]): EchoVe
     return { echo: false, overlap, question };
   }
 
-  // Trailing run of words that are mostly not Nova's (allow one shared word, e.g. "the").
+  // Trailing run of words that are mostly not Nila's (allow one shared word, e.g. "the").
   let start = words.length;
   let shared = 0;
   for (let i = words.length - 1; i >= 0; i--) {

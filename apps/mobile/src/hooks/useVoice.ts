@@ -32,9 +32,9 @@ import { matchWakeWord } from "@/lib/wake";
  *
  * Text-to-speech: lib/tts.ts (phone voice via expo-speech, or the optional natural voice).
  *
- * Voice barge-in (optional, native recognizer only): while Nova speaks, short recognition
- * sessions keep running (same machinery as the wake word). Text that mostly matches what Nova is
- * saying is ignored (lib/echo.ts); real speech stops Nova and is handed to `bargeIn.onInterrupt`.
+ * Voice barge-in (optional, native recognizer only): while Nila speaks, short recognition
+ * sessions keep running (same machinery as the wake word). Text that mostly matches what Nila is
+ * saying is ignored (lib/echo.ts); real speech stops Nila and is handed to `bargeIn.onInterrupt`.
  *
  * Wake word ("Hey <name>"): optional, native recognizer only (continuous listening isn't
  * possible over the server path). Runs short recognition sessions back-to-back while `active`,
@@ -134,11 +134,11 @@ export type WakeWordOptions = {
   enabled: boolean;
   /** The screen wants it right now (focused, not busy). AppState is handled inside the hook. */
   active: boolean;
-  /** The name to listen for, e.g. "Nova". */
+  /** The name to listen for, e.g. "Nila". */
   name: string;
-  /** "Hey Nova, <command>" in one utterance. */
+  /** "Hey Nila, <command>" in one utterance. */
   onCommand: (command: string) => void;
-  /** Just "Hey Nova": the hook starts a normal listening turn by itself; this is for UI feedback. */
+  /** Just "Hey Nila": the hook starts a normal listening turn by itself; this is for UI feedback. */
   onWake?: () => void;
 };
 
@@ -147,7 +147,7 @@ export type BargeInOptions = {
   enabled: boolean;
   /** The screen wants it (focused). */
   active: boolean;
-  /** Clear user speech detected (interim): the screen should stop Nova now. */
+  /** Clear user speech detected (interim): the screen should stop Nila now. */
   onHeard?: () => void;
   /** Final transcript of the interruption (echo already filtered out). */
   onInterrupt: (text: string) => void;
@@ -195,7 +195,7 @@ export function useVoice({ onFinalTranscript, lang = "en-IN", wakeWord, bargeIn 
   wakeRef.current = wakeWord;
   const bargeRef = useRef(bargeIn);
   bargeRef.current = bargeIn;
-  /** What Nova was saying during this barge session (TTS may already be stopped when the final arrives). */
+  /** What Nila was saying during this barge session (TTS may already be stopped when the final arrives). */
   const bargeSpoken = useRef<string[]>([]);
   const bargeHeard = useRef(false);
   const bargeResult = useRef("");
@@ -216,7 +216,7 @@ export function useVoice({ onFinalTranscript, lang = "en-IN", wakeWord, bargeIn 
   const maxTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const recordStartedAt = useRef(0);
   const mountedRef = useRef(true);
-  /** Set when "Hey Nova" (no command) was heard: start a normal turn once the wake session ends. */
+  /** Set when "Hey Nila" (no command) was heard: start a normal turn once the wake session ends. */
   const startPttAfterWake = useRef(false);
   const startListeningRef = useRef<() => Promise<boolean>>(async () => false);
   const wakeStartedAt = useRef(0);
@@ -328,7 +328,7 @@ export function useVoice({ onFinalTranscript, lang = "en-IN", wakeWord, bargeIn 
         if (Date.now() - bargeStartedAt.current < 1000) bargeFailures.current = Math.min(bargeFailures.current + 1, 5);
         else bargeFailures.current = 0;
         if (q) bargeRef.current?.onInterrupt(q);
-        setBargeTick((n) => n + 1); // loop while Nova is still speaking
+        setBargeTick((n) => n + 1); // loop while Nila is still speaking
         return;
       }
       if (kind === "wake") {
@@ -677,7 +677,7 @@ export function useVoice({ onFinalTranscript, lang = "en-IN", wakeWord, bargeIn 
     };
   }, [recognizer, wakeWanted, wakeName, lang, wakeTick, bargeTick, abortWake, ensureNativePermission]);
 
-  // ---------- Voice barge-in loop (while Nova speaks) ----------
+  // ---------- Voice barge-in loop (while Nila speaks) ----------
   const bargeWanted =
     !!bargeIn?.enabled && bargeIn.active && appActive && mode === "native" && speaking && !listening && !transcribing;
   const bargeConfigured = !!bargeIn?.enabled && !!bargeIn.active && mode === "native";
@@ -692,7 +692,7 @@ export function useVoice({ onFinalTranscript, lang = "en-IN", wakeWord, bargeIn 
   useEffect(() => {
     if (!recognizer) return;
     if (!bargeWanted) {
-      // Nova stopped talking: end the session, unless the user is mid-sentence (let it finish).
+      // Nila stopped talking: end the session, unless the user is mid-sentence (let it finish).
       if (sessionRef.current === "barge" && !bargeHeard.current) {
         try {
           recognizer.abort();

@@ -7,7 +7,7 @@ const ctx: LlmContext = {
   timezone: "Asia/Kolkata",
   now: new Date("2026-10-30T09:30:00Z"),
   userName: "Test",
-  assistantName: "Nova",
+  assistantName: "Nila",
   currency: "INR",
   memories: [],
 };

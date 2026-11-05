@@ -1,6 +1,6 @@
 @import "tailwindcss";
 
-/* Nova design tokens — one dark "deep space" theme. Every utility below
+/* Nila design tokens — one dark "deep space" theme. Every utility below
    (bg-surface, text-muted, border-line, ring-accent …) comes from here. */
 @theme {
   --color-void: #05070d;

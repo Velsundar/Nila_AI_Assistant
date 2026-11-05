@@ -39,7 +39,7 @@ type Props = {
 };
 
 /**
- * Nova's robot orb. Layers (back → front): glow halos, two dashed rings, the sphere core
+ * Nila's robot orb. Layers (back → front): glow halos, two dashed rings, the sphere core
  * with a 3D highlight, a visor with two eyes, and an equalizer "mouth" while speaking.
  *
  *  idle      – slow breathing glow, lazy ring drift, periodic blink

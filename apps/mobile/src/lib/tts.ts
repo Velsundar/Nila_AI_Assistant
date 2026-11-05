@@ -17,7 +17,7 @@ import { isClipCached, playNatural, prefetchClips, stopNatural } from "@/lib/nat
 import { naturalFailurePolicy } from "@/lib/speech-queue";
 
 /**
- * Everything Nova says goes through `speak()` / `stop()` here, whichever engine runs:
+ * Everything Nila says goes through `speak()` / `stop()` here, whichever engine runs:
  *
  *  - "device": the phone's voice via expo-speech. The user picks a style (female by default) and
  *    can pin an exact voice.
@@ -193,7 +193,7 @@ export function setSpeakingLevelSink(fn: ((v: number) => void) | null) {
   levelSink = fn;
 }
 
-/** What Nova is saying right now: [current chunk, whole utterance] (for the barge-in echo filter). */
+/** What Nila is saying right now: [current chunk, whole utterance] (for the barge-in echo filter). */
 export function getSpokenText(): string[] {
   return active ? [active.chunk, active.text].filter(Boolean) : [];
 }

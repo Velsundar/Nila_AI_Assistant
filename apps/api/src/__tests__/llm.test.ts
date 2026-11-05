@@ -5,7 +5,7 @@ import { runAgent } from "../agent/agent";
 import { registerUser } from "../test/helpers";
 import { UserModel } from "../models/User";
 
-const ctx = { timezone: "Asia/Kolkata", now: new Date(), userName: "T", assistantName: "Nova", currency: "INR", memories: [] };
+const ctx = { timezone: "Asia/Kolkata", now: new Date(), userName: "T", assistantName: "Nila", currency: "INR", memories: [] };
 
 function jsonResponse(body: unknown, status = 200) {
   return new Response(JSON.stringify(body), { status, headers: { "Content-Type": "application/json" } });

@@ -1,5 +1,6 @@
 "use client";
 
+import Image from "next/image";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { useEffect, type ReactNode } from "react";
@@ -31,11 +32,8 @@ export function AppShell({ children }: { children: ReactNode }) {
       <header className="sticky top-0 z-30 border-b border-line/70 bg-void/80 backdrop-blur-md">
         <div className="mx-auto flex h-14 w-full max-w-6xl items-center gap-2 px-3 sm:px-6">
           <Link href="/today" className="mr-auto flex items-center gap-2.5 rounded-control pr-2" aria-label={`${user.assistantName} home`}>
-            <span aria-hidden="true" className="relative grid size-7 place-items-center">
-              <span className="absolute inset-0 rounded-full bg-accent/40 blur-[6px]" />
-              <span className="relative size-6 rounded-full bg-gradient-to-br from-[#e0fffa] via-accent to-indigo-600" />
-            </span>
-            <span className="hidden font-semibold tracking-tight sm:inline">Nova</span>
+            <Image src="/logo.png" alt="" width={28} height={28} priority className="size-7" />
+            <span className="hidden font-semibold tracking-tight sm:inline">Nila</span>
           </Link>
           <nav aria-label="Main" className="flex items-center gap-1">
             {NAV.map((item) => {

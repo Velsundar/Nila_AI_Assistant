@@ -17,7 +17,7 @@ export type UseWakeWordOptions = {
   lang?: string;
   /**
    * Fired once per detection. `command` is whatever followed the wake phrase in the same
-   * utterance ("" when the user only said "hey nova"). Recognition has already ended.
+   * utterance ("" when the user only said "hey nila"). Recognition has already ended.
    */
   onWake: (command: string) => void;
   /**
@@ -31,7 +31,7 @@ export type UseWakeWordOptions = {
   trailingMs?: number;
 };
 
-/** How long to wait after hearing "hey nova…" for the rest of the sentence before acting. */
+/** How long to wait after hearing "hey nila…" for the rest of the sentence before acting. */
 const TRAILING_MS = 1300;
 
 /**

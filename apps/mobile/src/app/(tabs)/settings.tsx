@@ -407,7 +407,7 @@ function NaturalVoicePanel({
         ) : (
           <Text style={styles.warn}>
             {natural.reason === "NO_KEY"
-              ? "The Nova server has no Groq API key, so the natural voice is off."
+              ? "The Nila server has no Groq API key, so the natural voice is off."
               : "The natural voice isn't available on the server right now."}
           </Text>
         )}
@@ -428,7 +428,7 @@ function NaturalVoicePanel({
       <Button title="Test voice" variant="secondary" onPress={onTest} />
       <Text style={styles.dim}>
         Uses the free daily AI quota (free tier: about 100 spoken replies per day across all users), and replies start about a
-        second later. If it's unavailable or the quota runs out, Nova finishes with your phone's voice.
+        second later. If it's unavailable or the quota runs out, Nila finishes with your phone's voice.
       </Text>
     </View>
   );
@@ -436,7 +436,7 @@ function NaturalVoicePanel({
 
 function bargeUnavailableReason() {
   return isRunningInExpoGo()
-    ? "Needs a development build: it keeps the phone's native speech recognizer running while Nova talks, and that recognizer isn't in Expo Go."
+    ? "Needs a development build: it keeps the phone's native speech recognizer running while Nila talks, and that recognizer isn't in Expo Go."
     : "This device has no speech recognition service available.";
 }
 

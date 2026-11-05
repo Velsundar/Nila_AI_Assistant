@@ -5,7 +5,7 @@ import { createContext, useCallback, useContext, useEffect, useMemo, useState, t
 const PREFS = {
   speakReplies: { key: "nova.speakReplies", default: true },
   wakeWord: { key: "nova.wakeWord", default: false },
-  /** Interrupt Nova by just talking while it speaks (dev builds with native recognition). */
+  /** Interrupt Nila by just talking while it speaks (dev builds with native recognition). */
   voiceBargeIn: { key: "nova.voiceBargeIn", default: false },
   autoBriefing: { key: "nova.autoBriefing", default: false },
   weeklyReportNotification: { key: "nova.weeklyReportNotif", default: false },

@@ -1,8 +1,8 @@
 /**
- * Echo filter for "interrupt by voice". On speakers, the mic hears Nova's own voice, and the
+ * Echo filter for "interrupt by voice". On speakers, the mic hears Nila's own voice, and the
  * browser's recognizer happily transcribes it. Treat a transcript as an echo (not a real
  * interruption) when it is too short to mean anything, or when most of its words are words
- * Nova is saying right now. Pure, so it is unit-tested with tsx.
+ * Nila is saying right now. Pure, so it is unit-tested with tsx.
  */
 import { normalize } from "../hooks/wakeMatch";
 
@@ -32,8 +32,8 @@ function withinOneEdit(a: string, b: string): boolean {
 }
 
 /**
- * The mic hears Nova through the speakers, so the recognizer garbles her words: "log any" →
- * "login", "no" → "now", "expenses" → "ex", "tasks" → "task". Count a heard word as Nova's when
+ * The mic hears Nila through the speakers, so the recognizer garbles her words: "log any" →
+ * "login", "no" → "now", "expenses" → "ex", "tasks" → "task". Count a heard word as Nila's when
  * it is a near-miss of a spoken word, not only an exact match.
  */
 function soundsSaid(w: string, said: Set<string>): boolean {
@@ -46,7 +46,7 @@ function soundsSaid(w: string, said: Set<string>): boolean {
   return false;
 }
 
-/** Share (0..1) of the heard words that (nearly) match what Nova is saying. */
+/** Share (0..1) of the heard words that (nearly) match what Nila is saying. */
 export function echoOverlap(heard: string, spoken: string): number {
   const h = words(heard);
   if (!h.length) return 1;
@@ -64,13 +64,13 @@ export function classifyHeard(heard: string, spoken: string, threshold = 0.6): E
   return echoOverlap(heard, spoken) >= threshold ? "echo" : "speech";
 }
 
-/** True when the transcript should be ignored (echo of Nova's own voice, or a stray word). */
+/** True when the transcript should be ignored (echo of Nila's own voice, or a stray word). */
 export function isLikelyEcho(heard: string, spoken: string, threshold = 0.6): boolean {
   return classifyHeard(heard, spoken, threshold) !== "speech";
 }
 
 /**
- * Remove a leading acknowledgement ("Okay.", "Mm-hmm.") that the mic picked up from Nova's own
+ * Remove a leading acknowledgement ("Okay.", "Mm-hmm.") that the mic picked up from Nila's own
  * ack right after an interruption: "okay what's the weather" → "what's the weather".
  */
 export function stripAck(transcript: string, acks: readonly string[]): string {
