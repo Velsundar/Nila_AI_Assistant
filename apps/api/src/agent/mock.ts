@@ -343,6 +343,41 @@ function generalAnswer(t: string): string | undefined {
 
 type Plan = { tool: string; args: Record<string, unknown> } | { reply: string };
 
+const INCOME_RE = /\b(received|receive|got paid|credited|incoming|salary|earned|refund(ed)?|cashback|reimbursed)\b|\b(gave|paid|sent|transferred) me\b/;
+const INCOME_QUERY_RE = /\bhow much\b.*\b(received|receive|earned|earn|income|got paid)\b|\b(my|total) income\b/;
+
+/** "Received 75k salary", "Ravi gave me 500", "500 credited from Acme" → manageIncome add. */
+export function parseIncome(t: string, ctx: LlmContext): Plan | undefined {
+  if (!INCOME_RE.test(t)) return undefined;
+  const amount = parseAmount(t);
+  if (!amount) return { reply: "How much did you receive?" };
+  const payerAfter = phraseAfter(t, ["from", "by"]);
+  const payerBefore = /^(?:my )?([a-z][a-z ]{0,30}?) (?:gave|paid|sent|transferred) me\b/.exec(t)?.[1];
+  const payer = payerAfter ?? (payerBefore && !/^(i|someone|somebody)$/.test(payerBefore) ? payerBefore : undefined);
+  const category = /\bsalary|paycheck|wages\b/.test(t)
+    ? "Salary"
+    : /\b(refund(ed)?|cashback|reimburs\w*)\b/.test(t)
+      ? "Refund"
+      : /\b(gift|birthday)\b/.test(t)
+        ? "Gift"
+        : /\binterest|dividend\b/.test(t)
+          ? "Interest"
+          : "Other";
+  const note = phraseAfter(t, ["for"]);
+  const date = parseDay(t, ctx);
+  return {
+    tool: "manageIncome",
+    args: {
+      action: "add",
+      amount,
+      category,
+      ...(payer ? { payer: titleCase(payer) } : {}),
+      ...(note ? { note } : {}),
+      ...(date && date !== today(ctx) ? { date } : {}),
+    },
+  };
+}
+
 export function planFor(message: string, ctx: LlmContext): Plan {
   const t = norm(message).replace(/[?!.]+$/, "");
 
@@ -396,6 +431,10 @@ export function planFor(message: string, ctx: LlmContext): Plan {
 
   // delete / update (destructive -> server asks for confirmation)
   if (/\b(delete|remove|undo|erase|scratch)\b/.test(t)) {
+    if (/\b(income|salary|received|credit(ed)?)\b/.test(t)) {
+      const amount = parseAmount(t);
+      return { tool: "manageIncome", args: { action: "delete", ...(amount ? { amount } : {}) } };
+    }
     const merchant = phraseAfter(t, ["at", "from"]) ?? [...KNOWN_MERCHANTS].find((m) => new RegExp(`\\b${m}\\b`).test(t));
     const amount = parseAmount(t);
     const match = { ...(merchant ? { merchant } : {}), ...(amount ? { amount } : {}) };
@@ -411,6 +450,14 @@ export function planFor(message: string, ctx: LlmContext): Plan {
     if (!Object.keys(args).length) return { reply: "What should I change it to? You can say, change my last expense to 300." };
     return { tool: "updateExpense", args };
   }
+
+  // income (before spending queries: "how much did I receive" is not spending)
+  if (INCOME_QUERY_RE.test(t)) {
+    const period = parsePeriod(t, ctx);
+    return { tool: "manageIncome", args: { action: "summary", ...(period.from ? { from: period.from, to: period.to } : {}) } };
+  }
+  const income = parseIncome(t, ctx);
+  if (income) return income;
 
   // queries
   if (/\b(recent|latest|last( \d+)?) (expenses?|transactions?|purchases?)\b|\b(show|list) (me )?my (expenses|transactions)\b|\bwhat did i (buy|spend on)\b/.test(t)) {
@@ -500,6 +547,21 @@ export function composeReply(name: string, result: Json, ctx: LlmContext, userTe
         else if (pct >= 80) s += ` Heads up, you've used ${pct}% of your ${b.category} budget.`;
       }
       return s;
+    }
+    case "manageIncome": {
+      if (result.income && !Array.isArray(result.income)) {
+        const i = result.income as Json;
+        const from = i.payer ? ` from ${i.payer}` : i.note ? ` for ${i.note}` : "";
+        return `Got it, ${money(i.amount)} received${from}, logged as ${i.category} income.`;
+      }
+      if (Array.isArray(result.income)) {
+        const list = result.income as Json[];
+        if (!list.length) return "You haven't logged any income yet.";
+        return `Your latest income: ${joinList(list.slice(0, 3).map((i) => `${money(i.amount)}${i.payer ? ` from ${i.payer}` : ""}`))}.`;
+      }
+      const label = parsePeriod(userText, ctx).label;
+      if (!result.count) return `You haven't logged any income ${label}.`;
+      return `You've received ${money(result.totalReceived)} ${label}, across ${result.count} payment${result.count === 1 ? "" : "s"}.`;
     }
     case "getSpendingSummary": {
       const label = parsePeriod(userText, ctx).label;

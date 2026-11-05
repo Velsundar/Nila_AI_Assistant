@@ -126,6 +126,55 @@ export type SpendingSummary = {
   byDay: { date: string; total: number }[]; // date = "YYYY-MM-DD"
 };
 
+// ---------- Income (money received: salary, refunds, someone paying you back) ----------
+// Kept apart from expenses so spending totals, budgets and reports never count money coming in.
+
+export const INCOME_CATEGORIES = ["Salary", "Business", "Refund", "Gift", "Transfer", "Interest", "Other"] as const;
+export const IncomeCategorySchema = z.enum(INCOME_CATEGORIES);
+export type IncomeCategory = z.infer<typeof IncomeCategorySchema>;
+
+export const IncomeSchema = z.object({
+  id: z.string(),
+  amount: z.number().positive(),
+  category: IncomeCategorySchema,
+  /** Who paid, e.g. "Acme Corp" or "Ravi". */
+  payer: z.string().optional(),
+  note: z.string().optional(),
+  date: isoDate,
+  source: ExpenseSourceSchema,
+  createdAt: isoDate,
+});
+export type Income = z.infer<typeof IncomeSchema>;
+
+export const CreateIncomeSchema = z.object({
+  amount: z.number().positive().max(100_000_000),
+  category: IncomeCategorySchema.default("Other"),
+  payer: z.string().max(100).optional(),
+  note: z.string().max(500).optional(),
+  date: isoDate.optional(), // defaults to now on the server
+  source: ExpenseSourceSchema.default("manual"),
+});
+export type CreateIncomeInput = z.input<typeof CreateIncomeSchema>;
+
+export const UpdateIncomeSchema = CreateIncomeSchema.partial();
+export type UpdateIncomeInput = z.input<typeof UpdateIncomeSchema>;
+
+export const IncomeQuerySchema = z.object({
+  from: isoDate.optional(),
+  to: isoDate.optional(),
+  category: IncomeCategorySchema.optional(),
+  limit: z.coerce.number().int().min(1).max(500).default(100),
+});
+export type IncomeQuery = z.input<typeof IncomeQuerySchema>;
+
+export type IncomeSummary = {
+  from: string;
+  to: string;
+  total: number;
+  count: number;
+  byCategory: { category: IncomeCategory; total: number; count: number }[];
+};
+
 // ---------- Budgets ----------
 
 export const UpsertBudgetSchema = z.object({

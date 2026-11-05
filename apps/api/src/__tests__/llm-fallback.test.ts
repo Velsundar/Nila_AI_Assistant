@@ -148,7 +148,8 @@ describe("token diet", () => {
     expect(byName.manageTask.properties.ids).toBeUndefined();
     expect(byName.manageNote.properties.noteId).toBeUndefined();
     expect(byName.manageTask.properties.action.enum).toEqual(["add", "list", "complete", "delete"]);
-    expect(json.length).toBeLessThan(5500);
+    // ~4 chars per token; raised from 5500 when manageIncome was added (~150 tokens per call).
+    expect(json.length).toBeLessThan(6000);
   });
 
   it("lets optional tool args be null so Groq doesn't reject the call", () => {

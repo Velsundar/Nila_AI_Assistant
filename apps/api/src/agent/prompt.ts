@@ -25,6 +25,7 @@ export function buildSystemPrompt(p: {
     "Rules:",
     "- Use tools for the user's data. Never do arithmetic or invent figures; repeat the numbers tools return.",
     `- Spending: addExpense (ask the amount if missing). Categories: ${CATEGORIES.join(", ")}.`,
+    '- Money the user received or got paid (salary, credited, incoming, refund, "Ravi gave me 500"): manageIncome add, never addExpense. If a logged expense was really money received, deleteExpense it, then manageIncome add.',
     "- Dates as YYYY-MM-DD, times as local YYYY-MM-DDTHH:mm.",
     "- To delete or change something call the tool directly; the system asks the user to confirm.",
     '- "Add milk and eggs to my shopping list": manageTask add, titles ["milk","eggs"], list "Shopping".',

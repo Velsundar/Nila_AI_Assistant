@@ -1,11 +1,13 @@
 import { z, type ZodTypeAny } from "zod";
 import { zodToJsonSchema } from "zod-to-json-schema";
 import { Types, isValidObjectId } from "mongoose";
-import { CATEGORIES, type Category, type Expense } from "@nova/shared";
+import { CATEGORIES, INCOME_CATEGORIES, type Category, type Expense, type Income, type IncomeCategory } from "@nova/shared";
 import { ExpenseModel } from "../models/Expense";
+import { IncomeModel } from "../models/Income";
 import { MemoryModel } from "../models/Memory";
 import { BudgetModel } from "../models/Budget";
 import * as expenses from "../services/expenses";
+import * as income from "../services/income";
 import * as budgets from "../services/budgets";
 import * as reminders from "../services/reminders";
 import * as tasks from "../services/tasks";
@@ -13,7 +15,7 @@ import * as notes from "../services/notes";
 import { buildDailyBriefing, buildWeeklyReport } from "../services/insights";
 import { geocodeCity, getForecast, WeatherError } from "../services/weather";
 import { isDateOnly, localDateString, zonedToUtc } from "../services/dates";
-import { toExpense } from "../services/serialize";
+import { toExpense, toIncome } from "../services/serialize";
 import { formatMoney, speakDay } from "./format";
 import type { ToolDefinition } from "./llm";
 
@@ -73,6 +75,13 @@ export function normalizeCategory(v: unknown): unknown {
 }
 
 const category = z.preprocess(normalizeCategory, z.enum(CATEGORIES));
+
+export function normalizeIncomeCategory(v: unknown): unknown {
+  if (typeof v !== "string") return v;
+  const s = v.trim().toLowerCase();
+  const aliases: Record<string, IncomeCategory> = { salary: "Salary", wages: "Salary", pay: "Salary", paycheck: "Salary", freelance: "Business", sales: "Business", cashback: "Refund", reimbursement: "Refund", present: "Gift", interest: "Interest", dividend: "Interest", transfer: "Transfer" };
+  return INCOME_CATEGORIES.find((c) => c.toLowerCase() === s) ?? aliases[s] ?? "Other";
+}
 const dateStr = z
   .string()
   .refine((s) => !Number.isNaN(Date.parse(s)), "Invalid date, use YYYY-MM-DD");
@@ -102,6 +111,22 @@ function brief(e: Expense, tz: string) {
     ...(e.note ? { note: e.note } : {}),
     date: localDateString(new Date(e.date), tz),
   };
+}
+
+function briefIncome(i: Income, tz: string) {
+  return {
+    id: i.id,
+    amount: i.amount,
+    category: i.category,
+    ...(i.payer ? { payer: i.payer } : {}),
+    ...(i.note ? { note: i.note } : {}),
+    date: localDateString(new Date(i.date), tz),
+  };
+}
+
+function describeIncome(i: { amount: number; payer?: string; note?: string; category: string; date: string }, ctx: ToolContext) {
+  const what = i.payer ? `from ${i.payer}` : i.note ? `for ${i.note}` : `of ${i.category} income`;
+  return `${formatMoney(i.amount, ctx.currency)} ${what} ${speakDay(i.date, ctx.timezone, ctx.now)}`;
 }
 
 export function describeExpense(e: { amount: number; merchant?: string; note?: string; category: string; date: string }, ctx: ToolContext) {
@@ -335,6 +360,64 @@ export const TOOLS: Tool[] = [
       const d = r.deleted;
       return `Done, I deleted ${formatMoney(d.amount, ctx.currency)}${d.merchant ? ` at ${d.merchant}` : d.note ? ` for ${d.note}` : ""}.`;
     },
+  }),
+  tool({
+    name: "manageIncome",
+    description: "Money RECEIVED (salary, refund, paid back). add: amount. list/summary: from, to. delete: payer/amount pick it, else latest (confirmed automatically).",
+    schema: z.object({
+      action: z.enum(["add", "list", "summary", "delete"]),
+      amount: money.optional(),
+      category: z.preprocess(normalizeIncomeCategory, z.enum(INCOME_CATEGORIES)).optional().describe("Salary, Refund, Gift…"),
+      payer: z.string().max(100).optional(),
+      note: z.string().max(500).optional(),
+      date: dateStr.optional(),
+      from: dateStr.optional(),
+      to: dateStr.optional(),
+      incomeId: z.string().optional(),
+    }),
+    hiddenArgs: ["incomeId"],
+    confirmIf: (a) => a.action === "delete",
+    async prepare(a, ctx) {
+      const filter: Record<string, unknown> = { userId: oid(ctx.userId) };
+      if (a.payer) filter.payer = new RegExp(`^${escapeRe(a.payer.trim())}`, "i");
+      if (a.amount) filter.amount = a.amount;
+      const doc = await IncomeModel.findOne(filter).sort({ date: -1, createdAt: -1 }).lean();
+      if (!doc) throw new ToolError(a.payer || a.amount ? "No matching income found." : "There is no income logged yet.");
+      const i = toIncome(doc);
+      return { args: { action: "delete", incomeId: i.id }, summary: `Delete ${describeIncome(i, ctx)}?` };
+    },
+    async execute(a, ctx) {
+      if (a.action === "add") {
+        if (!a.amount) throw new ToolError("amount is required: ask how much was received");
+        const i = await income.createIncome(
+          ctx.userId,
+          { amount: a.amount, category: a.category ?? "Other", payer: a.payer, note: a.note, date: a.date, source: "voice" },
+          ctx.timezone,
+        );
+        return { income: briefIncome(i, ctx.timezone) };
+      }
+      if (a.action === "list") {
+        const list = await income.listIncome(ctx.userId, { from: a.from, to: a.to, limit: 10 }, ctx.timezone);
+        return { income: list.map((i) => briefIncome(i, ctx.timezone)) };
+      }
+      if (a.action === "summary") {
+        const s = await income.getIncomeSummary(ctx.userId, { from: a.from, to: a.to }, ctx.timezone);
+        return {
+          from: localDateString(new Date(s.from), ctx.timezone),
+          to: localDateString(new Date(s.to), ctx.timezone),
+          totalReceived: s.total,
+          count: s.count,
+          byCategory: s.byCategory,
+        };
+      }
+      if (!a.incomeId) throw new ToolError("Nothing to delete");
+      try {
+        return { deleted: briefIncome(await income.deleteIncome(ctx.userId, a.incomeId), ctx.timezone) };
+      } catch {
+        throw new ToolError("That income entry no longer exists.");
+      }
+    },
+    confirmedReply: (r, ctx) => `Done, I deleted ${formatMoney(r.deleted.amount, ctx.currency)} of income.`,
   }),
   tool({
     name: "setBudget",

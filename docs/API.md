@@ -55,3 +55,19 @@ Clients should use `createApiClient()` from `@nova/shared` instead of raw fetch.
 | POST | /api/speak | SpeakInput (≤ 400 chars, one sentence or two) | SpeakResult (`data:audio/wav;base64,...`) |
 
 Errors on POST /api/speak: 503 `TTS_UNAVAILABLE` (no key / terms not accepted: clients fall back to the device voice), 429 `TTS_RATE_LIMITED`, 429 `DAILY_LIMIT`, 400 `VALIDATION_ERROR` (unknown voice).
+
+## v4: income (money received)
+
+Income lives in its own collection (`incomes`), so `/api/expenses/summary`, budgets, the briefing and the weekly report never count money coming in. Categories: `INCOME_CATEGORIES` = Salary, Business, Refund, Gift, Transfer, Interest, Other (default Other).
+
+| Method | Path | Body / Query | Response |
+|---|---|---|---|
+| GET | /api/income | ?from&to&category&limit | `{ income: Income[] }` newest first |
+| POST | /api/income | CreateIncomeInput `{ amount, category?, payer?, note?, date?, source? }` | `{ income }` (201) |
+| PATCH | /api/income/:id | UpdateIncomeInput | `{ income }` |
+| DELETE | /api/income/:id | — | 204 |
+| GET | /api/income/summary | ?from&to (default: current month) | IncomeSummary `{ from, to, total, count, byCategory }` |
+
+Client: `api.income.{list, create, update, remove, summary}`.
+
+Agent: the `manageIncome` tool (`add` / `list` / `summary` / `delete`, where delete is confirmed). The prompt routes "received / credited / salary / X gave me" to it, never to `addExpense`. Clients should refresh when `actions` contains `manageIncome`.

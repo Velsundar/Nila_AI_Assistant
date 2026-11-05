@@ -1,4 +1,4 @@
-import type { Category, Expense, Note, Reminder, Task, TaskPriority, User, ExpenseSource } from "@nova/shared";
+import type { Category, Expense, Income, IncomeCategory, Note, Reminder, Task, TaskPriority, User, ExpenseSource } from "@nova/shared";
 import { ASSISTANT_NAME, DEFAULT_CURRENCY } from "@nova/shared";
 
 type Id = { toString(): string };
@@ -83,3 +83,25 @@ export function toNote(n: { _id: Id; text: string; createdAt?: Date | null; upda
 }
 
 export const round2 = (n: number) => Math.round(n * 100) / 100;
+
+export function toIncome(i: {
+  _id: Id;
+  amount: number;
+  category?: string | null;
+  payer?: string | null;
+  note?: string | null;
+  date: Date;
+  source?: string | null;
+  createdAt?: Date | null;
+}): Income {
+  return {
+    id: i._id.toString(),
+    amount: i.amount,
+    category: (i.category || "Other") as IncomeCategory,
+    ...(i.payer ? { payer: i.payer } : {}),
+    ...(i.note ? { note: i.note } : {}),
+    date: iso(i.date),
+    source: (i.source || "manual") as ExpenseSource,
+    createdAt: iso(i.createdAt),
+  };
+}

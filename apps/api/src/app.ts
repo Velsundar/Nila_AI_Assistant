@@ -12,6 +12,7 @@ import { remindersRouter } from "./routes/reminders";
 import { agentRouter } from "./routes/agent";
 import { tasksRouter } from "./routes/tasks";
 import { notesRouter } from "./routes/notes";
+import { incomeRouter } from "./routes/income";
 import { briefingRouter, reportsRouter } from "./routes/insights";
 import { receiptsRouter, transcribeRouter } from "./routes/media";
 import { speakRouter } from "./routes/speak";
@@ -76,6 +77,7 @@ export function createApp(opts: AppOptions = {}) {
 
   app.use("/api/auth", ...(useLimits ? [limiter(15 * 60_000, 30)] : []), authRouter);
   app.use("/api/expenses", requireAuth, expensesRouter);
+  app.use("/api/income", requireAuth, incomeRouter);
   app.use("/api/budgets", requireAuth, budgetsRouter);
   app.use("/api/reminders", requireAuth, remindersRouter);
   app.use("/api/tasks", requireAuth, tasksRouter);
