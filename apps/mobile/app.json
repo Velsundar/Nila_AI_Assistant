@@ -75,6 +75,17 @@
     ],
     "experiments": {
       "typedRoutes": true
-    }
+    },
+    "extra": {
+      "router": {
+        "asyncRoutes": {
+          "web": true
+        }
+      },
+      "eas": {
+        "projectId": "08f5266b-56bb-4e57-9113-708f601fb654"
+      }
+    },
+    "owner": "sundaravel.exe"
   }
 }
