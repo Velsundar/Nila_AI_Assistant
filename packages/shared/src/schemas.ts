@@ -427,6 +427,8 @@ export type ReceiptScanResult = {
     merchant?: string;
     date?: string;
     category?: Category;
+    /** e.g. "Swiggy", "Fuel", "Theatre"; usually one of SUBCATEGORIES[category]. */
+    subcategory?: string;
     note?: string;
   };
   confidence: "high" | "medium" | "low";

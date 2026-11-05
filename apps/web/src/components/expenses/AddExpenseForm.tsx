@@ -24,7 +24,7 @@ function fromDraft(d: ExpenseDraft["draft"], fallbackDate: string, fallbackCateg
   return {
     amount: d.amount !== undefined ? String(d.amount) : "",
     category: toCategory(d.category) ?? fallbackCategory,
-    subcategory: "",
+    subcategory: d.subcategory ?? "",
     merchant: d.merchant ?? "",
     // Receipts can't be in the future; keep a sane date if the scan misread it.
     date: day && day <= dayKey() ? day : fallbackDate,

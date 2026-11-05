@@ -67,7 +67,7 @@ describe("POST /api/receipts/scan", () => {
       vision: { baseUrl: "https://x/v1", apiKey: "k", model: "qwen/qwen3.8-27b" },
       fetchImpl: fetchImpl as unknown as typeof fetch,
     });
-    expect(r).toEqual({ draft: { amount: 1249.5, merchant: "DMart", date: "2026-10-27", category: "Groceries", note: "groceries" }, confidence: "high" });
+    expect(r).toEqual({ draft: { amount: 1249.5, merchant: "DMart", date: "2026-10-27", category: "Groceries", subcategory: "Supermarket", note: "groceries" }, confidence: "high" });
     const body = JSON.parse((fetchImpl.mock.calls[0] as unknown as [string, RequestInit])[1].body as string);
     expect(body.model).toBe("qwen/qwen3.8-27b");
     expect(body.response_format).toEqual({ type: "json_object" });
@@ -96,6 +96,17 @@ describe("POST /api/receipts/scan", () => {
     const r = parseReceiptText("BIG BAZAAR\nTax Invoice\n12 Oct 2026\nItems 5\nGrand Total : 2,340.00\nCash 2,500.00", "2026-10-30");
     expect(r.draft).toMatchObject({ amount: 2340, merchant: "Big Bazaar", date: "2026-10-12" });
     expect(parseReceiptText("", "2026-10-30")).toEqual({ draft: {}, confidence: "low" });
+  });
+
+  it("fills a subcategory from the merchant or the model's guess", async () => {
+    expect(parseReceiptText("Swiggy\n02/11/2026\nTotal 349.00", "2026-11-05").draft).toMatchObject({ category: "Food", subcategory: "Swiggy" });
+    expect(parseReceiptText("Indian Oil Petrol Pump\n01/11/2026\nTotal 500.00", "2026-11-05").draft).toMatchObject({ category: "Vehicle", subcategory: "Fuel" });
+    const reply = (content: string) => vi.fn(async () => new Response(JSON.stringify({ choices: [{ message: { content } }] }), { status: 200 }));
+    const opts = { baseUrl: "https://x", apiKey: "k", model: "m" };
+    const fromModel = await visionScan(IMG, "2026-11-05", { ...opts, fetchImpl: reply('{"amount":420,"merchant":"PVR","category":"Life & Entertainment","subcategory":"theater","note":"Leo movie"}') as unknown as typeof fetch });
+    expect(fromModel).toMatchObject({ category: "Life & Entertainment", subcategory: "Theatre" });
+    const inferred = await visionScan(IMG, "2026-11-05", { ...opts, fetchImpl: reply('{"amount":250,"merchant":"Zomato","category":"Food","subcategory":null}') as unknown as typeof fetch });
+    expect(inferred).toMatchObject({ category: "Food", subcategory: "Zomato" });
   });
 });
 

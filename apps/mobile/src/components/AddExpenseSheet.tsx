@@ -63,7 +63,7 @@ export function AddExpenseSheet({ visible, onClose, onCreated, receipt }: Props)
     const d = receipt.draft;
     setAmount(d.amount != null ? String(d.amount) : "");
     setCategory(d.category && (CATEGORIES as readonly string[]).includes(d.category) ? d.category : "Other");
-    setSubcategory("");
+    setSubcategory(d.subcategory ?? "");
     setMerchant(d.merchant ?? "");
     setNote(d.note ?? "");
     setDate(d.date && STRICT_DATE.test(d.date) ? d.date : undefined);

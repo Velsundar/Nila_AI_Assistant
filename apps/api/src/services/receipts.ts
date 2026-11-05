@@ -13,6 +13,7 @@ import { HttpError } from "../errors";
 import { PROVIDER_DEFAULTS, rateLimitWaitMs, stripThinking } from "../agent/llm";
 import { categoryFromText } from "../agent/mock";
 import { normalizeCategory } from "../agent/tools";
+import { classifyExpense } from "./categories";
 import { addDays, localDateString } from "./dates";
 
 export const MAX_IMAGE_BYTES = 4.5 * 1024 * 1024;
@@ -125,7 +126,22 @@ export function parseReceiptText(text: string, today: string): { draft: Draft; c
 
   for (const k of Object.keys(draft) as (keyof Draft)[]) if (draft[k] === undefined || draft[k] === "") delete draft[k];
   const confidence = draft.amount && draft.merchant && draft.date ? "medium" : "low";
-  return { draft, confidence };
+  return { draft: withSubcategory(draft), confidence };
+}
+
+/**
+ * Same inference as a typed or spoken expense: snap the subcategory to the listed spelling, or infer
+ * it from merchant + note ("Swiggy" → Food/Swiggy, "Indian Oil" → Vehicle/Fuel). The category is only
+ * filled when the scan had none.
+ */
+function withSubcategory(d: Draft): Draft {
+  if (!d.category && !d.subcategory && !d.merchant && !d.note) return d;
+  const c = classifyExpense({ category: d.category, subcategory: d.subcategory, merchant: d.merchant, note: d.note });
+  const out: Draft = { ...d };
+  delete out.subcategory;
+  if (d.category || c.category !== "Other") out.category = c.category;
+  if (c.subcategory) out.subcategory = c.subcategory;
+  return out;
 }
 
 // ---------- vision LLM ----------
@@ -141,7 +157,7 @@ export function visionConfig(): { baseUrl: string; apiKey: string; model: string
 function visionPrompt(today: string): string {
   return [
     "Read this receipt or bill and reply with JSON only:",
-    `{"amount": number (final total paid, after tax), "merchant": string, "date": "YYYY-MM-DD", "category": one of ${CATEGORIES.join("|")}, "note": short 1-3 word description like "lunch" or "groceries"}.`,
+    `{"amount": number (final total paid, after tax), "merchant": string, "date": "YYYY-MM-DD", "category": one of ${CATEGORIES.join("|")}, "subcategory": the shop type or app, e.g. Swiggy|Restaurant|Supermarket|Fuel|Theatre, or null, "note": short 1-3 word description like "lunch" or "groceries"}.`,
     `Use null for anything you cannot read. Indian receipts usually write dates as DD/MM/YYYY. Today is ${today}.`,
     'If the image is not a receipt, reply {"amount": null}.',
   ].join("\n");
@@ -179,7 +195,8 @@ export function normalizeDraft(raw: Record<string, unknown>, today: string): Dra
     if (guess) d.category = guess;
   }
   if (typeof raw.note === "string" && raw.note.trim()) d.note = raw.note.trim().slice(0, 100);
-  return d;
+  if (typeof raw.subcategory === "string" && raw.subcategory.trim() && raw.subcategory.trim().toLowerCase() !== "null") d.subcategory = raw.subcategory.trim();
+  return withSubcategory(d);
 }
 
 export async function visionScan(
