@@ -1,9 +1,14 @@
 import { createApp } from "./app";
 import { config } from "./config";
 import { connectDb, disconnectDb } from "./db";
+import { migrateLegacyCategories } from "./services/migrations";
 
 async function main() {
   await connectDb();
+  const m = await migrateLegacyCategories();
+  if (m.expenses || m.budgetsRenamed || m.budgetsDropped) {
+    console.log(`[api] Migrated legacy categories: ${m.expenses} expenses, ${m.budgetsRenamed} budgets renamed, ${m.budgetsDropped} duplicate budgets dropped`);
+  }
   const app = createApp();
   const server = app.listen(config.port, () => {
     console.log(`[api] Nila API listening on http://localhost:${config.port} (LLM provider: ${config.llm.provider})`);

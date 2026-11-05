@@ -13,7 +13,8 @@ import { agentRouter } from "./routes/agent";
 import { tasksRouter } from "./routes/tasks";
 import { notesRouter } from "./routes/notes";
 import { incomeRouter } from "./routes/income";
-import { briefingRouter, reportsRouter } from "./routes/insights";
+import { briefingRouter, insightsRouter, reportsRouter } from "./routes/insights";
+import { ledgerRouter } from "./routes/ledger";
 import { receiptsRouter, transcribeRouter } from "./routes/media";
 import { speakRouter } from "./routes/speak";
 import type { LlmClient } from "./agent/llm";
@@ -84,6 +85,8 @@ export function createApp(opts: AppOptions = {}) {
   app.use("/api/notes", requireAuth, notesRouter);
   app.use("/api/briefing", requireAuth, briefingRouter);
   app.use("/api/reports", requireAuth, reportsRouter);
+  app.use("/api/insights", requireAuth, insightsRouter);
+  app.use("/api/ledger", requireAuth, ledgerRouter);
   app.use("/api/speak", requireAuth, ...(useLimits ? [limiter(60_000, opts.speakPerMinute ?? config.tts.ratePerMinute, true)] : []), speakRouter);
   app.use("/api/agent", requireAuth, ...(useLimits ? [limiter(60_000, 20, true)] : []), agentRouter(opts.getLlm));
 

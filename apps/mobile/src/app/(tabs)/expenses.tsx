@@ -1,12 +1,14 @@
 import Ionicons from "@expo/vector-icons/Ionicons";
 import { useFocusEffect } from "expo-router";
-import { useCallback, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { ActivityIndicator, Alert, Pressable, RefreshControl, ScrollView, StyleSheet, Text, View } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
-import type { BudgetStatus, Expense, Income, IncomeSummary, ReceiptScanResult, SpendingSummary, WeeklyReport } from "@nova/shared";
+import type { BudgetStatus, Category, Expense, Income, IncomeSummary, Ledger, ReceiptScanResult, SpendingSummary, TrendsResult, WeeklyReport } from "@nova/shared";
 
 import { AddExpenseSheet } from "@/components/AddExpenseSheet";
 import { AddIncomeSheet } from "@/components/AddIncomeSheet";
+import { BalanceSection } from "@/components/BalanceSection";
+import { TrendsSection } from "@/components/TrendsSection";
 import { Banner, Card, ProgressBar, SectionTitle } from "@/components/ui";
 import { WeeklyReportCard } from "@/components/WeeklyReportCard";
 import { useSpeaker } from "@/hooks/useSpeaker";
@@ -25,7 +27,13 @@ type Data = {
   /** null when the API predates v4 income: the spending view still works. */
   incomeSummary: IncomeSummary | null;
   income: Income[];
+  /** null when the request fails (pre-v5 API): the section is hidden. */
+  ledger: Ledger | null;
+  trends: TrendsResult | null;
 };
+
+/** Subcategory split for the expanded category row. */
+type Split = { category: Category; status: "loading" | "ok" | "error"; rows: { subcategory: string; total: number; count: number }[] };
 
 function budgetColor(pct: number) {
   if (pct >= 100) return Colors.danger;
@@ -48,9 +56,14 @@ export default function ExpensesScreen() {
   const [sheetKey, setSheetKey] = useState(0);
   const [scanning, setScanning] = useState(false);
   const loadedVersion = useRef<number | null>(null);
+  const loadSeq = useRef(0);
+  const [expanded, setExpanded] = useState<Category | null>(null);
+  const [split, setSplit] = useState<Split | null>(null);
   const speaker = useSpeaker();
 
   const load = useCallback(async () => {
+    // Focus, pull-to-refresh and invalidateData can overlap: only the newest load may write.
+    const mine = ++loadSeq.current;
     try {
       // The weekly report is optional: an older API without it shouldn't break this screen.
       const reportP = api.reports.weekly({ tz: deviceTimezone() }).catch(() => null);
@@ -60,19 +73,26 @@ export default function ExpensesScreen() {
         incomeSummary: await api.income.summary({ from: summary.from, to: summary.to }).catch(() => null),
       }));
       const incomeP = api.income.list({ limit: 20 }).then((r) => r.income).catch(() => [] as Income[]);
-      const [{ summary, incomeSummary }, { budgets }, { expenses }, report, income] = await Promise.all([
+      // v5 sections fail soft, like income: hidden if the endpoint isn't there yet.
+      const ledgerP = api.ledger().catch(() => null);
+      const trendsP = api.trends({ months: 6 }).catch(() => null);
+      const [{ summary, incomeSummary }, { budgets }, { expenses }, report, income, ledger, trends] = await Promise.all([
         summariesP,
         api.budgets.list(),
         api.expenses.list({ limit: 50 }),
         reportP,
         incomeP,
+        ledgerP,
+        trendsP,
       ]);
-      setData({ summary, budgets, expenses, report, incomeSummary, income });
+      if (mine !== loadSeq.current) return;
+      setData({ summary, budgets, expenses, report, incomeSummary, income, ledger, trends });
       setError(null);
     } catch (e) {
+      if (mine !== loadSeq.current) return;
       setError(errorMessage(e));
     } finally {
-      setLoading(false);
+      if (mine === loadSeq.current) setLoading(false);
     }
   }, []);
 
@@ -85,6 +105,29 @@ export default function ExpensesScreen() {
       }
     }, [dataVersion, load]),
   );
+
+  // Subcategory split for the tapped category. Re-fetched whenever the summary reloads (add/delete
+  // anywhere bumps dataVersion → load → new summary object), so the split can never go stale.
+  const summary = data?.summary;
+  useEffect(() => {
+    if (!expanded || !summary) {
+      setSplit(null);
+      return;
+    }
+    let cancelled = false;
+    setSplit((prev) => ({ category: expanded, status: "loading", rows: prev?.category === expanded ? prev.rows : [] }));
+    api.expenses
+      .summary({ from: summary.from, to: summary.to, category: expanded })
+      .then((r) => {
+        if (cancelled) return;
+        const rows = [...(r.bySubcategory ?? [])].sort((a, b) => b.total - a.total);
+        setSplit({ category: expanded, status: "ok", rows });
+      })
+      .catch(() => !cancelled && setSplit({ category: expanded, status: "error", rows: [] }));
+    return () => {
+      cancelled = true;
+    };
+  }, [expanded, summary]);
 
   const stopSpeaker = speaker.stop;
   useFocusEffect(useCallback(() => () => stopSpeaker(), [stopSpeaker]));
@@ -238,6 +281,10 @@ export default function ExpensesScreen() {
               )}
             </Card>
 
+            {data.ledger && <BalanceSection ledger={data.ledger} currency={currency} />}
+
+            {data.trends && data.trends.months.length > 0 && <TrendsSection trends={data.trends} currency={currency} />}
+
             {data.report && (
               <View>
                 <SectionTitle>Weekly report</SectionTitle>
@@ -258,16 +305,58 @@ export default function ExpensesScreen() {
                 ) : (
                   byCategory.map((c) => {
                     const meta = CategoryMeta[c.category] ?? CategoryMeta.Other;
+                    const open = expanded === c.category;
+                    const s = open && split?.category === c.category ? split : null;
                     return (
-                      <View key={c.category} style={{ gap: 6 }} accessible accessibilityLabel={`${c.category}: ${formatMoney(c.total, currency)}, ${c.count} expenses`}>
-                        <View style={styles.rowBetween}>
-                          <View style={styles.row}>
-                            <Ionicons name={meta.icon as keyof typeof Ionicons.glyphMap} size={16} color={meta.color} />
-                            <Text style={styles.catName}>{c.category}</Text>
+                      <View key={c.category} style={{ gap: 6 }}>
+                        <Pressable
+                          onPress={() => setExpanded(open ? null : c.category)}
+                          accessibilityRole="button"
+                          accessibilityLabel={`${c.category}: ${formatMoney(c.total, currency)}, ${c.count} expenses`}
+                          accessibilityHint={open ? "Hides the subcategory split" : "Shows the subcategory split"}
+                          accessibilityState={{ expanded: open }}
+                          style={({ pressed }) => [{ gap: 6, paddingVertical: 2 }, pressed && { opacity: 0.7 }]}
+                        >
+                          <View style={styles.rowBetween}>
+                            <View style={styles.row}>
+                              <Ionicons name={meta.icon} size={16} color={meta.color} />
+                              <Text style={styles.catName}>{c.category}</Text>
+                              <Ionicons name={open ? "chevron-up" : "chevron-down"} size={14} color={Colors.textFaint} />
+                            </View>
+                            <Text style={styles.amount}>{formatMoney(c.total, currency)}</Text>
                           </View>
-                          <Text style={styles.amount}>{formatMoney(c.total, currency)}</Text>
-                        </View>
-                        <ProgressBar value={c.total / maxCat} color={meta.color} />
+                          <ProgressBar value={c.total / maxCat} color={meta.color} />
+                        </Pressable>
+                        {open && (
+                          <View style={styles.split}>
+                            {!s || (s.status === "loading" && s.rows.length === 0) ? (
+                              <ActivityIndicator size="small" color={meta.color} accessibilityLabel={`Loading ${c.category} subcategories`} />
+                            ) : s.status === "error" ? (
+                              <Text style={styles.small}>Couldn't load the split. Pull to refresh.</Text>
+                            ) : s.rows.length === 0 ? (
+                              <Text style={styles.small}>No subcategories yet.</Text>
+                            ) : (
+                              s.rows.map((r) => (
+                                <View
+                                  key={r.subcategory}
+                                  style={{ gap: 4 }}
+                                  accessible
+                                  accessibilityLabel={`${r.subcategory}: ${formatMoney(r.total, currency)}, ${r.count} expense${r.count === 1 ? "" : "s"}, ${Math.round((r.total / Math.max(1, c.total)) * 100)} percent of ${c.category}`}
+                                >
+                                  <View style={styles.rowBetween}>
+                                    <Text style={styles.small} numberOfLines={1}>
+                                      {r.subcategory} · {r.count}
+                                    </Text>
+                                    <Text style={styles.small}>
+                                      {formatMoney(r.total, currency)} · {Math.round((r.total / Math.max(1, c.total)) * 100)}%
+                                    </Text>
+                                  </View>
+                                  <ProgressBar value={r.total / Math.max(1, c.total)} color={meta.color} height={5} />
+                                </View>
+                              ))
+                            )}
+                          </View>
+                        )}
                       </View>
                     );
                   })
@@ -371,7 +460,8 @@ export default function ExpensesScreen() {
                 <View style={styles.list}>
                   {data.expenses.map((e) => {
                     const meta = CategoryMeta[e.category] ?? CategoryMeta.Other;
-                    const label = `${e.merchant || e.category}, ${formatMoney(e.amount, currency)}, ${formatDate(e.date)}`;
+                    const cat = e.subcategory ? `${e.category} · ${e.subcategory}` : e.category;
+                    const label = `${e.merchant || cat}, ${formatMoney(e.amount, currency)}, ${formatDate(e.date)}${e.merchant ? `, ${cat}` : ""}`;
                     return (
                       <Pressable
                         key={e.id}
@@ -392,7 +482,7 @@ export default function ExpensesScreen() {
                             {e.merchant || e.category}
                           </Text>
                           <Text style={styles.small} numberOfLines={1}>
-                            {formatDate(e.date)} · {e.category}
+                            {formatDate(e.date)} · {cat}
                             {e.source === "voice" ? " · 🎙" : ""}
                             {e.note ? ` · ${e.note}` : ""}
                           </Text>
@@ -467,6 +557,7 @@ const styles = StyleSheet.create({
     backgroundColor: "rgba(52,211,153,0.08)",
   },
   incomeBtnText: { color: Colors.success, ...Font.small, fontWeight: "700" },
+  split: { gap: Spacing.sm, marginLeft: Spacing.xl, paddingLeft: Spacing.md, borderLeftWidth: 2, borderLeftColor: Colors.border, paddingVertical: Spacing.xs },
   catName: { color: Colors.text, ...Font.body, fontWeight: "600" },
   amount: { color: Colors.text, ...Font.body, fontWeight: "700" },
   list: { backgroundColor: Colors.surface, borderRadius: Radius.lg, borderWidth: 1, borderColor: Colors.border, overflow: "hidden", paddingBottom: Spacing.sm },

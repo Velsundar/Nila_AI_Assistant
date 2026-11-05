@@ -1,91 +1,173 @@
 "use client";
 
-import { CATEGORIES, type BudgetStatus, type Category, type Expense, type Income, type IncomeSummary, type SpendingSummary } from "@nova/shared";
+import {
+  CATEGORIES,
+  type BudgetStatus,
+  type Category,
+  type Expense,
+  type Income,
+  type IncomeSummary,
+  type Ledger,
+  type SpendingSummary,
+  type TrendsResult,
+} from "@nova/shared";
 import { useCallback, useEffect, useRef, useState, type FormEvent } from "react";
 import { WeeklyReportCard } from "@/components/dashboard/WeeklyReportCard";
+import { BalanceCard } from "@/components/dashboard/BalanceCard";
+import { TrendsCard } from "@/components/dashboard/TrendsCard";
 import { AddExpenseForm, type ExpenseDraft } from "@/components/expenses/AddExpenseForm";
 import { AddIncomeForm } from "@/components/expenses/AddIncomeForm";
 import { ReceiptDropzone } from "@/components/expenses/ReceiptScanner";
 import { useAuth } from "@/components/AuthProvider";
-import { CategoryDonut, DailyBars } from "@/components/dashboard/Charts";
+import { CategoryDonut, DailyBars, SubcategorySplit, categoryColor } from "@/components/dashboard/Charts";
 import { Button, Card, Notice, SelectField, Spinner, TextField } from "@/components/ui";
 import { api, errorMessage, fieldErrors } from "@/lib/api";
 import { cn } from "@/lib/cn";
 import { DATA_CHANGED_EVENT, DATA_VERSION_KEY, notifyDataChanged } from "@/lib/events";
-import { dayKey, formatMoney, monthKey, monthLabel, monthRange, shiftMonth, shortDate } from "@/lib/format";
+import { dayKey, formatMoney, localDayOf, monthKey, monthLabel, monthRange, shiftMonth, shortDate } from "@/lib/format";
 
 type Data = { summary: SpendingSummary; expenses: Expense[]; budgets: BudgetStatus[]; incomeSummary: IncomeSummary | null; income: Income[] };
+/** Salary-cycle ledger and trends: v5 endpoints, hidden (null) when the API doesn't have them yet. */
+type Money = { ledger: Ledger | null; trends: TrendsResult | null };
+
+const round2 = (n: number) => Math.round(n * 100) / 100;
+
+/**
+ * The summary minus one expense, so the pie, daily bars, totals and budgets move in the same frame as the
+ * list. The refetch that follows replaces it with the server's numbers.
+ */
+function withoutExpense(d: Data, e: Expense): Data {
+  const s = d.summary;
+  const day = localDayOf(e.date);
+  const summary: SpendingSummary = {
+    ...s,
+    total: Math.max(0, round2(s.total - e.amount)),
+    count: Math.max(0, s.count - 1),
+    byCategory: s.byCategory
+      .map((c) => (c.category === e.category ? { ...c, total: round2(c.total - e.amount), count: c.count - 1 } : c))
+      .filter((c) => c.count > 0 && c.total > 0),
+    byDay: s.byDay.map((x) => (x.date.slice(0, 10) === day ? { ...x, total: Math.max(0, round2(x.total - e.amount)) } : x)),
+  };
+  // Budgets are always for the current calendar month.
+  const thisMonth = day.slice(0, 7) === monthKey();
+  const budgets = thisMonth
+    ? d.budgets.map((b) => {
+        if (b.category !== e.category) return b;
+        const spent = Math.max(0, round2(b.spent - e.amount));
+        return { ...b, spent, percentUsed: b.monthlyLimit > 0 ? (spent / b.monthlyLimit) * 100 : 0 };
+      })
+    : d.budgets;
+  return { ...d, summary, budgets, expenses: d.expenses.filter((x) => x.id !== e.id) };
+}
 
 export default function DashboardPage() {
   const { user } = useAuth();
   const currency = user?.currency || "INR";
   const [month, setMonth] = useState(() => monthKey());
   const [data, setData] = useState<Data | null>(null);
+  const [money, setMoney] = useState<Money>({ ledger: null, trends: null });
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [draft, setDraft] = useState<ExpenseDraft | null>(null);
+  const [drill, setDrill] = useState<Category | null>(null);
   const reqId = useRef(0);
+  const moneyReq = useRef(0);
   const isCurrentMonth = month === monthKey();
 
   const load = useCallback(async () => {
     const id = ++reqId.current;
     setLoading(true);
-    setError(null);
     const { from, to } = monthRange(month);
-    try {
-      const [summary, list, budgets, incomeSummary, incomeList] = await Promise.all([
-        api.expenses.summary({ from, to }),
-        api.expenses.list({ from, to, limit: 100 }),
-        api.budgets.list(),
-        // Income is optional: an API from before income existed shouldn't take the dashboard down.
-        api.income.summary({ from, to }).catch(() => null),
-        api.income.list({ from, to, limit: 50 }).catch(() => ({ income: [] as Income[] })),
-      ]);
-      if (id !== reqId.current) return;
-      setData({ summary, expenses: list.expenses, budgets: budgets.budgets, incomeSummary, income: incomeList.income });
-    } catch (err) {
-      if (id === reqId.current) setError(errorMessage(err));
-    } finally {
-      if (id === reqId.current) setLoading(false);
-    }
+    // Each part settles on its own: one failing request must not leave the pie / totals / budgets
+    // showing numbers from before the last change while the list has already moved on.
+    const [summary, list, budgets, incomeSummary, incomeList] = await Promise.allSettled([
+      api.expenses.summary({ from, to }),
+      api.expenses.list({ from, to, limit: 100 }),
+      api.budgets.list(),
+      // Income is optional: an API from before income existed shouldn't take the dashboard down.
+      api.income.summary({ from, to }),
+      api.income.list({ from, to, limit: 50 }),
+    ]);
+    if (id !== reqId.current) return;
+    const failed = [summary, list, budgets].find((r): r is PromiseRejectedResult => r.status === "rejected");
+    setError(failed ? errorMessage(failed.reason) : null);
+    setData((prev) => {
+      if (summary.status !== "fulfilled" || list.status !== "fulfilled") {
+        // Without the core data there's nothing consistent to show: keep what we had, with the error notice.
+        return prev;
+      }
+      return {
+        summary: summary.value,
+        expenses: list.value.expenses,
+        budgets: budgets.status === "fulfilled" ? budgets.value.budgets : (prev?.budgets ?? []),
+        incomeSummary: incomeSummary.status === "fulfilled" ? incomeSummary.value : null,
+        income: incomeList.status === "fulfilled" ? incomeList.value.income : [],
+      };
+    });
+    setLoading(false);
   }, [month]);
 
-  // Always refetch on mount / month change, and whenever another screen (the assistant) changes data.
+  /** Ledger + trends don't depend on the month picker. Either missing (older API) → that card hides. */
+  const loadMoney = useCallback(async () => {
+    const id = ++moneyReq.current;
+    const [ledger, trends] = await Promise.allSettled([api.ledger(), api.trends({ months: 6 })]);
+    if (id !== moneyReq.current) return;
+    setMoney({ ledger: ledger.status === "fulfilled" ? ledger.value : null, trends: trends.status === "fulfilled" ? trends.value : null });
+  }, []);
+
+  // Refetch on mount / month change, whenever this or another screen (the assistant, another tab) changes
+  // data, and when the tab becomes visible again (changes made on the phone).
   useEffect(() => {
     void load();
-    const onChange = () => void load();
+    void loadMoney();
+    const onChange = () => {
+      void load();
+      void loadMoney();
+    };
+    const onVisible = () => document.visibilityState === "visible" && onChange();
+    const onStorage = (e: StorageEvent) => e.key === DATA_VERSION_KEY && onChange();
     window.addEventListener(DATA_CHANGED_EVENT, onChange);
     window.addEventListener("focus", onChange);
-    const onStorage = (e: StorageEvent) => e.key === DATA_VERSION_KEY && onChange();
     window.addEventListener("storage", onStorage);
+    document.addEventListener("visibilitychange", onVisible);
     return () => {
-      window.removeEventListener("storage", onStorage);
       window.removeEventListener(DATA_CHANGED_EVENT, onChange);
       window.removeEventListener("focus", onChange);
+      window.removeEventListener("storage", onStorage);
+      document.removeEventListener("visibilitychange", onVisible);
     };
-  }, [load]);
+  }, [load, loadMoney]);
 
-  async function removeExpense(id: string) {
-    const prev = data;
-    setData((d) => (d ? { ...d, expenses: d.expenses.filter((e) => e.id !== id) } : d));
+  useEffect(() => setDrill(null), [month]);
+
+  async function removeExpense(e: Expense) {
+    setData((d) => (d ? withoutExpense(d, e) : d));
     try {
-      await api.expenses.remove(id);
-      notifyDataChanged();
+      await api.expenses.remove(e.id);
     } catch (err) {
-      setData(prev);
       setError(errorMessage(err));
+    } finally {
+      // Success or failure, re-read the server's numbers (a failed delete puts the expense back).
+      notifyDataChanged();
     }
   }
 
-  async function removeIncome(id: string) {
-    const prev = data;
-    setData((d) => (d ? { ...d, income: d.income.filter((i) => i.id !== id) } : d));
+  async function removeIncome(inc: Income) {
+    setData((d) =>
+      d
+        ? {
+            ...d,
+            income: d.income.filter((i) => i.id !== inc.id),
+            incomeSummary: d.incomeSummary && { ...d.incomeSummary, total: Math.max(0, round2(d.incomeSummary.total - inc.amount)), count: Math.max(0, d.incomeSummary.count - 1) },
+          }
+        : d,
+    );
     try {
-      await api.income.remove(id);
-      notifyDataChanged();
+      await api.income.remove(inc.id);
     } catch (err) {
-      setData(prev);
       setError(errorMessage(err));
+    } finally {
+      notifyDataChanged();
     }
   }
 
@@ -147,14 +229,32 @@ export default function DashboardPage() {
             <Stat label="Top category" value={topCategory(data.summary) ?? "—"} className="max-lg:hidden" />
           </div>
 
+          {money.ledger && <BalanceCard ledger={money.ledger} currency={currency} className="lg:col-span-3" />}
+
           <WeeklyReportCard currency={currency} className="lg:col-span-3" />
 
-          <Card title="Spend by category" className="lg:col-span-1">
-            <CategoryDonut summary={data.summary} currency={currency} />
+          <Card title="Spend by category" className="lg:col-span-1" action={<span className="text-xs text-faint">Tap a slice for details</span>}>
+            <CategoryDonut summary={data.summary} currency={currency} selected={drill} onSelect={setDrill} />
           </Card>
-          <Card title="Spend by day" className="lg:col-span-2">
-            <DailyBars summary={data.summary} currency={currency} days={days} monthKey={month} />
+          <Card
+            title={drill ? <span className="flex items-center gap-2"><span aria-hidden="true" className="size-2.5 rounded-full" style={{ background: categoryColor(drill) }} />{drill} by subcategory</span> : "Spend by day"}
+            className="lg:col-span-2"
+            action={
+              drill ? (
+                <Button size="sm" variant="ghost" onClick={() => setDrill(null)}>
+                  Back to daily
+                </Button>
+              ) : undefined
+            }
+          >
+            {drill ? (
+              <SubcategoryPanel key={`${drill}-${month}`} category={drill} month={month} data={data} currency={currency} />
+            ) : (
+              <DailyBars summary={data.summary} currency={currency} days={days} monthKey={month} />
+            )}
           </Card>
+
+          {money.trends && <TrendsCard trends={money.trends} currency={currency} className="lg:col-span-3" />}
 
           <Card title="Add expense" className="lg:col-span-1">
             <ReceiptDropzone onResult={setDraft} className="mb-4" />
@@ -195,6 +295,50 @@ export default function DashboardPage() {
   );
 }
 
+/**
+ * One category's subcategory split for the month, from GET /expenses/summary?category=X. An API without
+ * `bySubcategory` falls back to grouping the loaded expenses, so the drill-down still works.
+ */
+function SubcategoryPanel({ category, month, data, currency }: { category: Category; month: string; data: Data; currency: string }) {
+  const [rows, setRows] = useState<NonNullable<SpendingSummary["bySubcategory"]> | null>(null);
+  const [loading, setLoading] = useState(true);
+  const req = useRef(0);
+  const local = useCallback(() => {
+    const m = new Map<string, { subcategory: string; total: number; count: number }>();
+    for (const e of data.expenses) {
+      if (e.category !== category) continue;
+      const k = e.subcategory?.trim() || "Other";
+      const r = m.get(k) ?? { subcategory: k, total: 0, count: 0 };
+      r.total = round2(r.total + e.amount);
+      r.count += 1;
+      m.set(k, r);
+    }
+    return [...m.values()];
+  }, [data.expenses, category]);
+
+  // Refetch whenever the dashboard data changes (add / delete / voice), not just on open.
+  useEffect(() => {
+    const id = ++req.current;
+    setLoading(true);
+    const { from, to } = monthRange(month);
+    api.expenses
+      .summary({ from, to, category })
+      .then((s) => id === req.current && setRows(s.bySubcategory ?? local()))
+      .catch(() => id === req.current && setRows(local()))
+      .finally(() => id === req.current && setLoading(false));
+  }, [category, month, data.summary, local]);
+
+  const total = data.summary.byCategory.find((c) => c.category === category)?.total ?? 0;
+  return (
+    <div>
+      <p className="mb-4 text-sm text-muted">
+        <span className="font-semibold tabular-nums text-fg">{formatMoney(total, currency)}</span> on {category} in {monthLabel(month)}
+      </p>
+      <SubcategorySplit category={category} rows={rows} currency={currency} loading={loading} />
+    </div>
+  );
+}
+
 function topCategory(s: SpendingSummary) {
   const top = [...s.byCategory].sort((a, b) => b.total - a.total)[0];
   return top && top.total > 0 ? top.category : null;
@@ -226,20 +370,22 @@ function Chevron({ dir }: { dir: "left" | "right" }) {
   );
 }
 
-function ExpenseList({ expenses, currency, onDelete }: { expenses: Expense[]; currency: string; onDelete: (id: string) => void }) {
+function ExpenseList({ expenses, currency, onDelete }: { expenses: Expense[]; currency: string; onDelete: (e: Expense) => void }) {
   const [confirming, setConfirming] = useState<string | null>(null);
   if (!expenses.length) return <p className="py-8 text-center text-sm text-faint">No expenses this month. Add one, or just tell your assistant.</p>;
   return (
     <ul className="-mx-2 max-h-[26rem] divide-y divide-line/60 overflow-y-auto">
       {expenses.map((e) => (
         <li key={e.id} className="flex items-center gap-3 px-2 py-2.5">
-          <span aria-hidden="true" className="grid size-9 shrink-0 place-items-center rounded-full bg-surface-2 text-xs font-semibold text-muted">
+          <span aria-hidden="true" className="relative grid size-9 shrink-0 place-items-center rounded-full bg-surface-2 text-xs font-semibold text-muted">
             {e.category.slice(0, 2)}
+            <span className="absolute bottom-0 right-0 size-2.5 rounded-full ring-2 ring-surface" style={{ background: categoryColor(e.category) }} />
           </span>
           <div className="min-w-0 flex-1">
-            <div className="truncate text-sm text-fg">{e.merchant || e.category}</div>
+            <div className="truncate text-sm text-fg">{e.merchant || e.subcategory || e.category}</div>
             <div className="truncate text-xs text-faint">
               {shortDate(e.date)} · {e.category}
+              {e.subcategory && ` · ${e.subcategory}`}
               {e.source === "voice" && " · 🎙 voice"}
               {e.source === "receipt" && " · 🧾 receipt"}
               {e.note && ` · ${e.note}`}
@@ -248,7 +394,7 @@ function ExpenseList({ expenses, currency, onDelete }: { expenses: Expense[]; cu
           <span className="shrink-0 text-sm font-medium tabular-nums">{formatMoney(e.amount, currency)}</span>
           {confirming === e.id ? (
             <span className="flex shrink-0 gap-1">
-              <Button size="sm" variant="danger" onClick={() => onDelete(e.id)} aria-label={`Confirm delete ${formatMoney(e.amount, currency)} ${e.merchant || e.category}`}>
+              <Button size="sm" variant="danger" onClick={() => onDelete(e)} aria-label={`Confirm delete ${formatMoney(e.amount, currency)} ${e.merchant || e.subcategory || e.category}`}>
                 Delete
               </Button>
               <Button size="sm" variant="ghost" onClick={() => setConfirming(null)}>
@@ -273,7 +419,7 @@ function ExpenseList({ expenses, currency, onDelete }: { expenses: Expense[]; cu
   );
 }
 
-function IncomeList({ income, currency, onDelete }: { income: Income[]; currency: string; onDelete: (id: string) => void }) {
+function IncomeList({ income, currency, onDelete }: { income: Income[]; currency: string; onDelete: (i: Income) => void }) {
   const [confirming, setConfirming] = useState<string | null>(null);
   if (!income.length) return <p className="py-8 text-center text-sm text-faint">No income this month. Add it here, or say “75k salary credited”.</p>;
   return (
@@ -296,7 +442,7 @@ function IncomeList({ income, currency, onDelete }: { income: Income[]; currency
             <span className="shrink-0 text-sm font-medium tabular-nums text-ok">+{formatMoney(i.amount, currency)}</span>
             {confirming === i.id ? (
               <span className="flex shrink-0 gap-1">
-                <Button size="sm" variant="danger" onClick={() => onDelete(i.id)} aria-label={`Confirm delete ${formatMoney(i.amount, currency)} ${label}`}>
+                <Button size="sm" variant="danger" onClick={() => onDelete(i)} aria-label={`Confirm delete ${formatMoney(i.amount, currency)} ${label}`}>
                   Delete
                 </Button>
                 <Button size="sm" variant="ghost" onClick={() => setConfirming(null)}>

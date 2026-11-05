@@ -1,6 +1,6 @@
 "use client";
 
-import type { DailyBriefing, Weather } from "@nova/shared";
+import type { DailyBriefing, Reminder, Weather } from "@nova/shared";
 import Link from "next/link";
 import { useCallback, useEffect, useState } from "react";
 import { SpeakerIcon } from "@/components/dashboard/WeeklyReportCard";
@@ -8,7 +8,7 @@ import { Button, Card, Spinner } from "@/components/ui";
 import { useSpeech } from "@/hooks/useSpeech";
 import { api, errorMessage } from "@/lib/api";
 import { cn } from "@/lib/cn";
-import { DATA_CHANGED_EVENT, DATA_VERSION_KEY } from "@/lib/events";
+import { DATA_CHANGED_EVENT, DATA_VERSION_KEY, notifyDataChanged } from "@/lib/events";
 import { dueLabel, formatMoney, timeOf, timezone } from "@/lib/format";
 import { useVoicePrefs } from "@/lib/prefs";
 
@@ -53,11 +53,26 @@ export function useBriefing() {
     };
   }, [load]);
 
-  return { briefing, error, loading, reload: load };
+  /** Optimistic delete: gone at once, put back if the API refuses, then everything refreshes. */
+  const removeReminder = useCallback(
+    async (r: Reminder) => {
+      setBriefing((b) => (b ? { ...b, reminders: b.reminders.filter((x) => x.id !== r.id) } : b));
+      try {
+        await api.reminders.remove(r.id);
+        notifyDataChanged();
+      } catch (err) {
+        setBriefing((b) => (b && !b.reminders.some((x) => x.id === r.id) ? { ...b, reminders: [...b.reminders, r].sort((x, y) => x.dateTime.localeCompare(y.dateTime)) } : b));
+        setError(errorMessage(err));
+      }
+    },
+    [],
+  );
+
+  return { briefing, error, loading, reload: load, removeReminder };
 }
 
 export function BriefingCard({ currency, className }: { currency: string; className?: string }) {
-  const { briefing: b, error, loading, reload } = useBriefing();
+  const { briefing: b, error, loading, reload, removeReminder } = useBriefing();
   const tts = useSpeech();
   const [prefs] = useVoicePrefs();
 
@@ -142,16 +157,19 @@ export function BriefingCard({ currency, className }: { currency: string; classN
               {b.reminders.length ? (
                 <ul className="space-y-1.5">
                   {b.reminders.slice(0, 5).map((r) => (
-                    <li key={r.id} className={cn("flex items-center gap-2 text-sm", r.done && "text-faint line-through")}>
-                      <span className="w-16 shrink-0 text-xs tabular-nums text-accent">{timeOf(r.dateTime)}</span>
-                      <span className="min-w-0 flex-1 truncate">{r.text}</span>
-                    </li>
+                    <ReminderRow key={r.id} reminder={r} onDelete={() => void removeReminder(r)} />
                   ))}
                 </ul>
               ) : (
                 <p className="text-sm text-faint">No reminders today.</p>
               )}
             </section>
+
+            {error && b && (
+              <p role="alert" className="text-xs text-danger sm:col-span-2">
+                {error}
+              </p>
+            )}
 
             {b.budgetAlerts.length > 0 && (
               <section aria-labelledby="brief-budgets" className="sm:col-span-2">
@@ -216,5 +234,37 @@ function MiniStat({ label, value, accent }: { label: string; value: string; acce
       <p className="text-xs text-muted">{label}</p>
       <p className={cn("mt-1 truncate text-lg font-semibold tabular-nums", accent && "text-accent")}>{value}</p>
     </div>
+  );
+}
+
+/** A reminder with a two-step delete (trash → Delete / Keep), like the expense rows. */
+function ReminderRow({ reminder: r, onDelete }: { reminder: Reminder; onDelete: () => void }) {
+  const [confirming, setConfirming] = useState(false);
+  return (
+    <li className="group flex min-h-8 items-center gap-2 text-sm">
+      <span className={cn("w-16 shrink-0 text-xs tabular-nums text-accent", r.done && "text-faint")}>{timeOf(r.dateTime)}</span>
+      <span className={cn("min-w-0 flex-1 truncate", r.done && "text-faint line-through")}>{r.text}</span>
+      {confirming ? (
+        <span className="flex shrink-0 gap-1">
+          <Button size="sm" variant="danger" onClick={onDelete} aria-label={`Confirm delete reminder ${r.text}`} autoFocus>
+            Delete
+          </Button>
+          <Button size="sm" variant="ghost" onClick={() => setConfirming(false)}>
+            Keep
+          </Button>
+        </span>
+      ) : (
+        <button
+          type="button"
+          onClick={() => setConfirming(true)}
+          aria-label={`Delete reminder ${r.text} at ${timeOf(r.dateTime)}`}
+          className="grid size-8 shrink-0 place-items-center rounded-control text-faint transition-colors hover:bg-danger/10 hover:text-danger sm:opacity-0 sm:group-hover:opacity-100 sm:focus-visible:opacity-100"
+        >
+          <svg aria-hidden="true" viewBox="0 0 24 24" className="size-4" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+            <path d="M4 7h16M10 11v6M14 11v6M6 7l1 12a2 2 0 0 0 2 2h6a2 2 0 0 0 2-2l1-12M9 7V4h6v3" />
+          </svg>
+        </button>
+      )}
+    </li>
   );
 }

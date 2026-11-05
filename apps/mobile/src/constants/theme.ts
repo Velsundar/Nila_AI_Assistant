@@ -1,3 +1,4 @@
+import type Ionicons from "@expo/vector-icons/Ionicons";
 import type { Category, IncomeCategory } from "@nova/shared";
 
 /** Single source of truth for the app's dark sci-fi look. */
@@ -43,22 +44,29 @@ export const Font = {
 /** Minimum touch target (Apple HIG / Material). */
 export const HitSize = 44;
 
-export const CategoryMeta: Record<Category, { color: string; icon: string }> = {
+/** Ionicons glyph name, typed so a missing glyph fails typecheck instead of rendering "?". */
+type IconName = keyof typeof Ionicons.glyphMap;
+
+export const CategoryMeta: Record<Category, { color: string; icon: IconName }> = {
   Food: { color: "#FB923C", icon: "fast-food-outline" },
   Groceries: { color: "#4ADE80", icon: "cart-outline" },
-  Transport: { color: "#60A5FA", icon: "car-outline" },
   Shopping: { color: "#F472B6", icon: "bag-handle-outline" },
-  Bills: { color: "#FACC15", icon: "receipt-outline" },
+  Housing: { color: "#E879F9", icon: "bed-outline" },
   Rent: { color: "#C084FC", icon: "home-outline" },
-  Entertainment: { color: "#F87171", icon: "film-outline" },
+  Transportation: { color: "#60A5FA", icon: "bus-outline" },
+  Vehicle: { color: "#93C5FD", icon: "car-sport-outline" },
+  Bills: { color: "#FACC15", icon: "receipt-outline" },
+  "Life & Entertainment": { color: "#F87171", icon: "film-outline" },
   Health: { color: "#2DD4BF", icon: "medkit-outline" },
   Education: { color: "#818CF8", icon: "school-outline" },
   Travel: { color: "#38BDF8", icon: "airplane-outline" },
+  Investments: { color: "#A3E635", icon: "trending-up-outline" },
+  "Savings & Insurance": { color: "#5EEAD4", icon: "shield-checkmark-outline" },
   Other: { color: "#94A3B8", icon: "ellipsis-horizontal-circle-outline" },
 };
 
 /** Income reads as money in: every category is a shade of green/teal so it never looks like spending. */
-export const IncomeCategoryMeta: Record<IncomeCategory, { color: string; icon: string }> = {
+export const IncomeCategoryMeta: Record<IncomeCategory, { color: string; icon: IconName }> = {
   Salary: { color: "#34D399", icon: "briefcase-outline" },
   Business: { color: "#2DD4BF", icon: "storefront-outline" },
   Refund: { color: "#4ADE80", icon: "return-down-back-outline" },

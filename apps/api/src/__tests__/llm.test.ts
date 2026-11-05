@@ -48,8 +48,8 @@ describe("OpenAI-compatible provider", () => {
     expect(body.model).toBe("openai/gpt-oss-120b");
     expect(body.tool_choice).toBe("auto");
     expect(body.tools[0]).toMatchObject({ type: "function", function: { name: "addExpense", parameters: { type: "object" } } });
-    expect(body.tools[0].function.parameters.properties.category.enum).toContain("Food");
-    expect(body.tools[0].function.parameters.required).toEqual(["amount", "category"]);
+    expect(body.tools[0].function.parameters.properties.category.enum).toBeUndefined(); // listed in the prompt instead
+    expect(body.tools[0].function.parameters.required).toEqual(["amount"]); // a missing category is inferred on the server
     expect(body.messages[2]).toEqual({ role: "assistant", content: "", tool_calls: req.messages[2].role === "assistant" ? req.messages[2].tool_calls : [] });
     expect(body.messages[3]).toEqual({ role: "tool", tool_call_id: "c0", content: '{"budgets":[]}' }); // no name for groq
   });

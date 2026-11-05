@@ -7,22 +7,11 @@ import type { Category } from "@nova/shared";
 import { CATEGORIES } from "@nova/shared";
 import { addDays, localDateString, pad, zonedParts, zonedToUtc } from "../services/dates";
 import { formatMoney, speakDay, speakTime } from "./format";
+import { categoryFromKeywords, classifyExpense, lookupCategory } from "../services/categories";
+import { speakYmd } from "../services/insights";
 import type { ChatMessage, ChatRequest, ChatResult, LlmClient, LlmContext, ToolCall } from "./llm";
 
 // ---------- vocabulary ----------
-
-const KEYWORDS: [Category, string[]][] = [
-  ["Groceries", ["blinkit", "zepto", "bigbasket", "big basket", "instamart", "dmart", "d mart", "jiomart", "grocery", "groceries", "vegetables", "veggies", "milk", "fruits", "kirana", "supermarket"]],
-  ["Transport", ["uber", "ola", "rapido", "metro", "auto", "rickshaw", "cab", "taxi", "bus", "petrol", "diesel", "fuel", "parking", "toll", "fastag", "commute", "transport"]],
-  ["Shopping", ["amazon", "flipkart", "myntra", "ajio", "meesho", "nykaa", "clothes", "shoes", "shirt", "jeans", "shopping", "gadget", "headphones"]],
-  ["Rent", ["rent", "landlord"]],
-  ["Bills", ["electricity", "water bill", "wifi", "wi-fi", "internet", "broadband", "recharge", "mobile bill", "phone bill", "gas bill", "cylinder", "dth", "jio", "airtel", "bill", "bills", "emi", "insurance"]],
-  ["Entertainment", ["netflix", "prime video", "hotstar", "spotify", "movie", "movies", "pvr", "inox", "bookmyshow", "concert", "gaming", "game", "entertainment"]],
-  ["Health", ["doctor", "hospital", "pharmacy", "medicine", "medicines", "apollo", "pharmeasy", "1mg", "gym", "clinic", "dentist", "health", "medical"]],
-  ["Education", ["course", "udemy", "coursera", "book", "books", "tuition", "school", "college", "fees", "exam", "education"]],
-  ["Travel", ["flight", "hotel", "train", "irctc", "makemytrip", "goibibo", "airbnb", "indigo", "trip", "vacation", "holiday", "travel"]],
-  ["Food", ["swiggy", "zomato", "dominos", "domino's", "mcdonalds", "mcdonald's", "kfc", "starbucks", "eatsure", "lunch", "dinner", "breakfast", "brunch", "coffee", "tea", "chai", "snacks", "snack", "food", "restaurant", "cafe", "pizza", "burger", "biryani", "dosa", "juice", "meal"]],
-];
 
 const KNOWN_MERCHANTS = new Set([
   "swiggy", "zomato", "dominos", "mcdonalds", "kfc", "starbucks", "uber", "ola", "rapido", "amazon", "flipkart", "myntra",
@@ -58,12 +47,16 @@ export function parseAmount(text: string): number | undefined {
   return n > 0 ? n : undefined;
 }
 
+/** Keyword rules first ("health insurance" is not Health), then category names, legacy names and aliases. */
 export function categoryFromText(text: string): Category | undefined {
   const t = ` ${norm(text)} `;
-  for (const c of CATEGORIES) if (t.includes(` ${c.toLowerCase()} `)) return c;
+  const kw = categoryFromKeywords(t);
+  if (kw) return kw;
+  for (const c of CATEGORIES) if (t.includes(` ${c.toLowerCase()} `) || t.includes(` ${c.toLowerCase().replace("&", "and")} `)) return c;
   if (/\bgrocer/.test(t)) return "Groceries";
-  for (const [cat, words] of KEYWORDS) {
-    if (words.some((w) => new RegExp(`(^|[^a-z])${w.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}([^a-z]|$)`).test(t))) return cat;
+  for (const w of t.split(/[^a-z]+/)) {
+    const hit = w ? lookupCategory(w) : undefined;
+    if (hit) return hit;
   }
   return undefined;
 }
@@ -403,6 +396,11 @@ export function planFor(message: string, ctx: LlmContext): Plan {
 
   // reminders (before expenses: "remind me to pay rent" contains "pay")
   if (/\bremind me\b/.test(t)) return { tool: "createReminder", args: parseReminder(message, ctx) };
+  if (/\b(delete|remove|cancel|clear)\b/.test(t) && /\breminders?\b/.test(t)) {
+    // "delete the reminder to call mom" → query "call mom"; "delete my reminder" → the next one.
+    const q = /\breminders?\s+(?:to|about|for|of)?\s*(.+)$/.exec(t)?.[1] ?? /\b(?:my|the)\s+(.+?)\s+reminders?\b/.exec(t)?.[1];
+    return { tool: "deleteReminder", args: q && !/^(my|the|it|that|this)$/.test(q) ? { query: q } : {} };
+  }
   if (/\breminders?\b/.test(t) && /\b(what|show|list|any|my|upcoming|pending)\b/.test(t)) return { tool: "listReminders", args: {} };
 
   const assistant = planAssistant(t, ctx, message);
@@ -427,6 +425,14 @@ export function planFor(message: string, ctx: LlmContext): Plan {
       return { tool: "getSpendingSummary", args: { category: cat } };
     }
     return { tool: "getBudgets", args: {} };
+  }
+
+  // balance and trends (after budgets: "how much is left in my food budget" is a budget question)
+  if (!parseAmount(t)) {
+    if (/\b(trends?|compare|comparison|compared|vs|versus|savings rate|my savings)\b|\bhow much (did|have) i (save|saved)\b|\bdid i save\b/.test(t)) {
+      return { tool: "getMoneyOverview", args: { view: "trends" } };
+    }
+    if (/\bbalance\b|\bhow much (money )?(is |do i have )?left\b|\bmoney left\b/.test(t)) return { tool: "getMoneyOverview", args: { view: "balance" } };
   }
 
   // delete / update (destructive -> server asks for confirmation)
@@ -476,7 +482,7 @@ export function planFor(message: string, ctx: LlmContext): Plan {
   }
 
   // add expense
-  if (amount && (/\b(spent|spend|paid|pay|bought|purchased|gave|cost|expense|add|added|for|on|at)\b/.test(t) || /^(₹|rs)/.test(t))) {
+  if (amount && (/\b(spent|spend|paid|pay|bought|purchased|gave|sent|send|invested|transferred|cost|expense|add|added|for|on|at)\b/.test(t) || /^(₹|rs)/.test(t))) {
     let merchant = phraseAfter(t, ["at", "from", "to", "via"]);
     let note = phraseAfter(t, ["on", "for"]);
     if (!merchant && note && KNOWN_MERCHANTS.has(note.split(" ")[0])) {
@@ -485,12 +491,18 @@ export function planFor(message: string, ctx: LlmContext): Plan {
     }
     if (!merchant) merchant = [...KNOWN_MERCHANTS].find((m) => new RegExp(`\\b${m}\\b`).test(t));
     const category = categoryFromText(`${merchant ?? ""} ${note ?? ""}`) ?? categoryFromText(t) ?? "Other";
+    // Like a real model following the prompt: name the subcategory when it's clear (the server
+    // would infer it anyway), and keep only the film's name as the note.
+    const c = classifyExpense({ category, merchant, note });
+    const subcategory = c.subcategory ?? classifyExpense({ category, note: t }).subcategory;
+    if (c.note) note = c.note;
     const date = parseDay(t, ctx);
     return {
       tool: "addExpense",
       args: {
         amount,
         category,
+        ...(subcategory ? { subcategory } : {}),
         ...(merchant ? { merchant: titleCase(merchant) } : {}),
         ...(note && note !== merchant ? { note } : {}),
         ...(date && date !== today(ctx) ? { date } : {}),
@@ -660,6 +672,10 @@ export function composeReply(name: string, result: Json, ctx: LlmContext, userTe
       return String(result.briefing);
     case "getWeeklyReport":
       return String(result.report);
+    case "getMoneyOverview":
+      return result.months ? trendsReply(result, money, userText) : balanceReply(result, money);
+    case "deleteReminder":
+      return "Done, I deleted that reminder.";
     case "updateExpense":
       return "Done, I've updated it.";
     case "deleteExpense":
@@ -667,6 +683,37 @@ export function composeReply(name: string, result: Json, ctx: LlmContext, userTe
     default:
       return "Done.";
   }
+}
+
+function balanceReply(r: Json, money: (n: number) => string): string {
+  if (!r.received && !r.spent && !r.invested) return "You haven't logged any money in or out this month.";
+  const intro =
+    r.period === "salary-cycle"
+      ? `You received ${money(r.received)} and spent ${money(r.spent)} since your salary on ${speakYmd(r.from)}.`
+      : r.received
+        ? `This month you received ${money(r.received)} and spent ${money(r.spent)}.`
+        : `You haven't logged any income this month, and you've spent ${money(r.spent)}.`;
+  const tail = r.balance >= 0 ? `so ${money(r.balance)} is left.` : `so you're ${money(-r.balance)} over what came in.`;
+  return r.invested ? `${intro} ${money(r.invested)} went to investments, ${tail}` : `${intro} ${tail[0]!.toUpperCase()}${tail.slice(1)}`;
+}
+
+function trendsReply(r: Json, money: (n: number) => string, userText: string): string {
+  const months = r.months as Json[];
+  const cur = months[months.length - 1]!;
+  const prev = months[months.length - 2]!;
+  if (/\bsav(e|ed|ing|ings)\b/.test(norm(userText))) {
+    if (!cur.received) return "You haven't logged any income this month, so I can't work out your savings yet.";
+    let s = `This month you've saved ${money(cur.saved)} of the ${money(cur.received)} you received, a savings rate of ${cur.savingsRate}%.`;
+    if (prev.savingsRate !== null) s += ` Last month it was ${prev.savingsRate}%.`;
+    return s;
+  }
+  let s = `You've spent ${money(cur.spent)} this month`;
+  const pct = r.spentChangePercent as number | null;
+  s += pct === null ? "." : Math.abs(pct) < 3 ? `, about the same as last month.` : `, ${Math.abs(Math.round(pct))}% ${pct > 0 ? "more" : "less"} than last month's ${money(prev.spent)}.`;
+  if (r.averageMonthlySpent > 0) s += ` Your monthly average is ${money(r.averageMonthlySpent)}.`;
+  const c = (r.categoryChanges as Json[])[0];
+  if (c && pct !== null && c.thisMonth !== c.lastMonth) s += ` The biggest change is ${c.category}: ${money(c.thisMonth)} this month against ${money(c.lastMonth)} last month.`;
+  return s;
 }
 
 export function createMockLlm(): LlmClient {

@@ -12,8 +12,10 @@ describe("expenses", () => {
     expect(a.status).toBe(201);
     expect(ExpenseSchema.parse(a.body.expense)).toBeTruthy();
     expect(a.body.expense.source).toBe("manual");
+    // Pre-v5 names are still accepted on input.
     const b = await api().post("/api/expenses").set(auth).send({ amount: 200, category: "Transport", date: "2026-01-12" });
     expect(b.status).toBe(201);
+    expect(b.body.expense.category).toBe("Transportation");
 
     const list = await api().get("/api/expenses").set(auth);
     expect(list.status).toBe(200);
@@ -47,7 +49,7 @@ describe("expenses", () => {
     const t = today();
     await api().post("/api/expenses").set(auth).send({ amount: 250, category: "Food", date: t });
     await api().post("/api/expenses").set(auth).send({ amount: 100.5, category: "Food", date: t });
-    await api().post("/api/expenses").set(auth).send({ amount: 1200, category: "Transport", date: t });
+    await api().post("/api/expenses").set(auth).send({ amount: 1200, category: "Transportation", date: t });
     await api().post("/api/expenses").set(auth).send({ amount: 999, category: "Food", date: "2020-01-01" }); // outside
 
     const s = await api().get("/api/expenses/summary").set(auth);
@@ -55,10 +57,11 @@ describe("expenses", () => {
     expect(s.body.total).toBe(1550.5);
     expect(s.body.count).toBe(3);
     expect(s.body.byCategory).toEqual([
-      { category: "Transport", total: 1200, count: 1 },
+      { category: "Transportation", total: 1200, count: 1 },
       { category: "Food", total: 350.5, count: 2 },
     ]);
     expect(s.body.byDay).toEqual([{ date: t, total: 1550.5 }]);
+    expect(s.body.bySubcategory).toBeUndefined();
     expect(Date.parse(s.body.from)).toBeLessThan(Date.parse(s.body.to));
 
     const old = await api().get("/api/expenses/summary?from=2020-01-01&to=2020-01-31").set(auth);

@@ -11,7 +11,7 @@ import {
   View,
 } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
-import { CATEGORIES, CreateExpenseSchema, type Category, type ReceiptScanResult } from "@nova/shared";
+import { CATEGORIES, CreateExpenseSchema, SUBCATEGORIES, type Category, type ReceiptScanResult } from "@nova/shared";
 
 import { Banner, Button, TextField } from "@/components/ui";
 import { CategoryMeta, Colors, Font, Radius, Spacing } from "@/constants/theme";
@@ -39,6 +39,8 @@ export function AddExpenseSheet({ visible, onClose, onCreated, receipt }: Props)
   const insets = useSafeAreaInsets();
   const [amount, setAmount] = useState("");
   const [category, setCategory] = useState<Category>("Food");
+  /** Free text; the chips below are SUBCATEGORIES[category]. Empty = let the server infer it. */
+  const [subcategory, setSubcategory] = useState("");
   const [merchant, setMerchant] = useState("");
   const [note, setNote] = useState("");
   const [error, setError] = useState<string | null>(null);
@@ -48,6 +50,7 @@ export function AddExpenseSheet({ visible, onClose, onCreated, receipt }: Props)
   const reset = () => {
     setAmount("");
     setCategory("Food");
+    setSubcategory("");
     setMerchant("");
     setNote("");
     setDate(undefined);
@@ -60,6 +63,7 @@ export function AddExpenseSheet({ visible, onClose, onCreated, receipt }: Props)
     const d = receipt.draft;
     setAmount(d.amount != null ? String(d.amount) : "");
     setCategory(d.category && (CATEGORIES as readonly string[]).includes(d.category) ? d.category : "Other");
+    setSubcategory("");
     setMerchant(d.merchant ?? "");
     setNote(d.note ?? "");
     setDate(d.date && STRICT_DATE.test(d.date) ? d.date : undefined);
@@ -71,6 +75,7 @@ export function AddExpenseSheet({ visible, onClose, onCreated, receipt }: Props)
     const parsed = CreateExpenseSchema.safeParse({
       amount: Number(amount.replace(/,/g, "")),
       category,
+      subcategory: subcategory.trim() || undefined,
       merchant: merchant.trim() || undefined,
       note: note.trim() || undefined,
       date,
@@ -144,7 +149,11 @@ export function AddExpenseSheet({ visible, onClose, onCreated, receipt }: Props)
                   return (
                     <Pressable
                       key={c}
-                      onPress={() => setCategory(c)}
+                      onPress={() => {
+                        // A chip picked for the old category doesn't belong to the new one; typed text stays.
+                        if (c !== category && SUBCATEGORIES[category].includes(subcategory)) setSubcategory("");
+                        setCategory(c);
+                      }}
                       accessibilityRole="radio"
                       accessibilityState={{ selected }}
                       accessibilityLabel={c}
@@ -156,6 +165,37 @@ export function AddExpenseSheet({ visible, onClose, onCreated, receipt }: Props)
                   );
                 })}
               </View>
+            </View>
+            <View style={{ gap: 6 }}>
+              <Text style={styles.label}>Subcategory (optional)</Text>
+              {SUBCATEGORIES[category].length > 0 && (
+                <View style={styles.cats} accessibilityRole="radiogroup" accessibilityLabel={`${category} subcategories`}>
+                  {SUBCATEGORIES[category].map((sc) => {
+                    const selected = sc.toLowerCase() === subcategory.trim().toLowerCase();
+                    const color = CategoryMeta[category].color;
+                    return (
+                      <Pressable
+                        key={sc}
+                        onPress={() => setSubcategory(selected ? "" : sc)}
+                        accessibilityRole="radio"
+                        accessibilityState={{ selected }}
+                        accessibilityLabel={sc}
+                        style={[styles.cat, selected && { borderColor: color, backgroundColor: `${color}22` }]}
+                      >
+                        <Text style={[styles.catText, selected && { color: Colors.text }]}>{sc}</Text>
+                      </Pressable>
+                    );
+                  })}
+                </View>
+              )}
+              <TextField
+                label="…or type your own"
+                value={subcategory}
+                onChangeText={setSubcategory}
+                placeholder={SUBCATEGORIES[category][0] ? `e.g. ${SUBCATEGORIES[category][0]}` : "e.g. Gift wrap"}
+                maxLength={40}
+                accessibilityLabel="Subcategory"
+              />
             </View>
             <TextField label="Merchant (optional)" value={merchant} onChangeText={setMerchant} placeholder="e.g. Swiggy" maxLength={100} />
             <TextField label="Note (optional)" value={note} onChangeText={setNote} placeholder="Anything to remember" maxLength={500} />

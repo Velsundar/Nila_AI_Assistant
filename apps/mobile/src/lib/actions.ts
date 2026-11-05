@@ -44,6 +44,13 @@ export function describeAction(a: AgentAction): ActionChip {
       return { label: "Reminder set", icon: "alarm-outline", route: "/today" };
     case "listReminders":
       return { label: "Reminders", icon: "alarm-outline", route: "/today" };
+    case "deleteReminder":
+      return { label: "Reminder deleted", icon: "trash-outline", route: "/today" };
+    case "getMoneyOverview":
+      // Both views live on the Expenses tab (Balance + Trends & savings sections).
+      return str(args.view) === "trends"
+        ? { label: "Spending trends", icon: "stats-chart-outline", route: "/expenses" }
+        : { label: "Balance", icon: "wallet-outline", route: "/expenses" };
     case "manageTask": {
       const list = str(result.list) ?? str(args.list);
       if (action === "add") return { label: list ? `Added to ${list}` : "Task added", icon: "checkbox-outline", route: "/today" };
@@ -68,7 +75,7 @@ export function describeAction(a: AgentAction): ActionChip {
   }
   // Generic fallback for tools this build doesn't know about yet.
   const t = a.tool;
-  const route: ActionRoute | undefined = /expense|income|budget|spend|summary|categor|report|receipt/i.test(t)
+  const route: ActionRoute | undefined = /expense|income|budget|spend|summary|categor|report|receipt|ledger|balance|trend|money/i.test(t)
     ? "/expenses"
     : /task|todo|note|remind|brief|weather|list/i.test(t)
       ? "/today"

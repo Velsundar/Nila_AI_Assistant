@@ -1,7 +1,7 @@
 "use client";
 
-import { CATEGORIES, type Category, type Expense, type ReceiptScanResult } from "@nova/shared";
-import { useEffect, useRef, useState, type FormEvent } from "react";
+import { CATEGORIES, LEGACY_CATEGORIES, SUBCATEGORIES, type Category, type Expense, type ReceiptScanResult } from "@nova/shared";
+import { useEffect, useId, useRef, useState, type FormEvent } from "react";
 import { Button, Notice, SelectField, TextField } from "@/components/ui";
 import { api, errorMessage, fieldErrors } from "@/lib/api";
 import { notifyDataChanged } from "@/lib/events";
@@ -10,13 +10,21 @@ import { ConfidenceBadge } from "./ReceiptScanner";
 
 export type ExpenseDraft = ReceiptScanResult & { preview?: string };
 
-type FormState = { amount: string; category: Category; merchant: string; date: string; note: string };
+type FormState = { amount: string; category: Category; subcategory: string; merchant: string; date: string; note: string };
+
+/** A current category name, mapping pre-v5 names ("Transport") to their new ones. */
+function toCategory(c: string | undefined): Category | undefined {
+  if (!c) return undefined;
+  if ((CATEGORIES as readonly string[]).includes(c)) return c as Category;
+  return LEGACY_CATEGORIES[c];
+}
 
 function fromDraft(d: ExpenseDraft["draft"], fallbackDate: string, fallbackCategory: Category): FormState {
   const day = d.date ? localDayOf(d.date) || d.date.slice(0, 10) : "";
   return {
     amount: d.amount !== undefined ? String(d.amount) : "",
-    category: d.category && (CATEGORIES as readonly string[]).includes(d.category) ? d.category : fallbackCategory,
+    category: toCategory(d.category) ?? fallbackCategory,
+    subcategory: "",
     merchant: d.merchant ?? "",
     // Receipts can't be in the future; keep a sane date if the scan misread it.
     date: day && day <= dayKey() ? day : fallbackDate,
@@ -41,7 +49,8 @@ export function AddExpenseForm({
   onCancelDraft?: () => void;
   autoFocus?: boolean;
 }) {
-  const empty: FormState = { amount: "", category: "Food", merchant: "", date: defaultDate, note: "" };
+  const empty: FormState = { amount: "", category: "Food", subcategory: "", merchant: "", date: defaultDate, note: "" };
+  const subListId = useId();
   const [form, setForm] = useState<FormState>(empty);
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [formError, setFormError] = useState<string | null>(null);
@@ -85,6 +94,8 @@ export function AddExpenseForm({
       const { expense } = await api.expenses.create({
         amount: Math.round(amount * 100) / 100,
         category: form.category,
+        // Omitted → the server infers it from the merchant / note ("Swiggy" → Food / Swiggy).
+        subcategory: form.subcategory.trim() || undefined,
         merchant: form.merchant.trim() || undefined,
         note: form.note.trim() || undefined,
         // Noon local time so the expense lands on the chosen day in any timezone.
@@ -130,16 +141,41 @@ export function AddExpenseForm({
       )}
       {formError && <Notice tone="danger" className="col-span-2">{formError}</Notice>}
       <TextField ref={amountRef} label="Amount (₹)" type="number" inputMode="decimal" min="0" step="0.01" placeholder="250" value={form.amount} onChange={(e) => setForm({ ...form, amount: e.target.value })} error={errors.amount} />
-      <SelectField label="Category" value={form.category} onChange={(e) => setForm({ ...form, category: e.target.value as Category })} error={errors.category}>
+      <SelectField
+        label="Category"
+        value={form.category}
+        onChange={(e) => {
+          const category = e.target.value as Category;
+          // A suggestion from the old category doesn't belong to the new one; typed text stays.
+          const keep = !SUBCATEGORIES[form.category].includes(form.subcategory);
+          setForm({ ...form, category, subcategory: keep ? form.subcategory : "" });
+        }}
+        error={errors.category}
+      >
         {CATEGORIES.map((c) => (
           <option key={c} value={c}>
             {c}
           </option>
         ))}
       </SelectField>
+      <TextField
+        label="Subcategory"
+        list={subListId}
+        placeholder={SUBCATEGORIES[form.category][0] ?? "Optional"}
+        maxLength={40}
+        autoComplete="off"
+        value={form.subcategory}
+        onChange={(e) => setForm({ ...form, subcategory: e.target.value })}
+        error={errors.subcategory}
+      />
+      <datalist id={subListId}>
+        {SUBCATEGORIES[form.category].map((s) => (
+          <option key={s} value={s} />
+        ))}
+      </datalist>
       <TextField label="Merchant" placeholder="Swiggy" maxLength={100} value={form.merchant} onChange={(e) => setForm({ ...form, merchant: e.target.value })} error={errors.merchant} />
       <TextField label="Date" type="date" max={dayKey()} value={form.date} onChange={(e) => setForm({ ...form, date: e.target.value })} error={errors.date} />
-      <TextField label="Note" placeholder="Optional" maxLength={500} value={form.note} onChange={(e) => setForm({ ...form, note: e.target.value })} error={errors.note} className="col-span-2" />
+      <TextField label="Note" placeholder="Optional" maxLength={500} value={form.note} onChange={(e) => setForm({ ...form, note: e.target.value })} error={errors.note} />
       <div className="col-span-2 flex items-center gap-3">
         <Button type="submit" loading={busy} className="flex-1">
           {draft ? "Save expense" : "Add expense"}

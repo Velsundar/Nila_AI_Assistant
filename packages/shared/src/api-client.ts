@@ -4,6 +4,7 @@ import type {
   ApiErrorBody,
   AuthResponse,
   BudgetStatus,
+  Category,
   CreateExpenseInput,
   CreateIncomeInput,
   CreateNoteInput,
@@ -15,6 +16,8 @@ import type {
   Income,
   IncomeQuery,
   IncomeSummary,
+  Ledger,
+  LedgerQuery,
   LoginInput,
   NaturalVoicesResult,
   Note,
@@ -28,6 +31,8 @@ import type {
   Task,
   TaskQuery,
   TranscribeInput,
+  TrendsQuery,
+  TrendsResult,
   UpdateExpenseInput,
   UpdateIncomeInput,
   UpdateMeInput,
@@ -108,9 +113,13 @@ export function createApiClient({ baseUrl, getToken, onUnauthorized }: ApiClient
       update: (id: string, input: UpdateExpenseInput) =>
         request<{ expense: Expense }>("PATCH", `/expenses/${id}`, input),
       remove: (id: string) => request<void>("DELETE", `/expenses/${id}`),
-      summary: (query: { from?: string; to?: string } = {}) =>
+      summary: (query: { from?: string; to?: string ; category?: Category } = {}) =>
         request<SpendingSummary>("GET", `/expenses/summary${qs(query)}`),
     },
+    /** Money in and out together with a running balance (default: the current salary cycle). */
+    ledger: (query: LedgerQuery = {}) => request<Ledger>("GET", `/ledger${qs(query)}`),
+    /** Month-by-month received / spent / invested / saved, plus changes vs last month. */
+    trends: (query: TrendsQuery = {}) => request<TrendsResult>("GET", `/insights/trends${qs(query)}`),
     /** Money received. Separate from expenses: spending totals and budgets never include it. */
     income: {
       list: (query: IncomeQuery = {}) => request<{ income: Income[] }>("GET", `/income${qs(query)}`),

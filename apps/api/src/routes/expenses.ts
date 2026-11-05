@@ -4,6 +4,7 @@ import { CategorySchema, CreateExpenseSchema, ExpenseQuerySchema, UpdateExpenseS
 import { ah, parse } from "../errors";
 import { reqTimezone, uid } from "../middleware/auth";
 import * as svc from "../services/expenses";
+import { withCurrentCategory } from "../services/categories";
 
 export const expensesRouter = Router();
 
@@ -13,7 +14,7 @@ const SummaryQuerySchema = z.object({ from: isoDate.optional(), to: isoDate.opti
 expensesRouter.get(
   "/",
   ah(async (req, res) => {
-    const q = parse(ExpenseQuerySchema, req.query);
+    const q = parse(ExpenseQuerySchema, withCurrentCategory(req.query));
     res.json({ expenses: await svc.listExpenses(uid(req), q, reqTimezone(req)) });
   }),
 );
@@ -21,7 +22,7 @@ expensesRouter.get(
 expensesRouter.get(
   "/summary",
   ah(async (req, res) => {
-    const q = parse(SummaryQuerySchema, req.query);
+    const q = parse(SummaryQuerySchema, withCurrentCategory(req.query));
     res.json(await svc.getSummary(uid(req), q, reqTimezone(req)));
   }),
 );
@@ -29,7 +30,7 @@ expensesRouter.get(
 expensesRouter.post(
   "/",
   ah(async (req, res) => {
-    const input = parse(CreateExpenseSchema, req.body);
+    const input = parse(CreateExpenseSchema, withCurrentCategory(req.body));
     res.status(201).json({ expense: await svc.createExpense(uid(req), input, reqTimezone(req)) });
   }),
 );
@@ -45,7 +46,7 @@ expensesRouter.patch(
   "/:id",
   ah(async (req, res) => {
     // .partial() keeps the `source` default; strip it unless the client actually sent it.
-    const input = parse(UpdateExpenseSchema, req.body);
+    const input = parse(UpdateExpenseSchema, withCurrentCategory(req.body));
     if (!req.body || typeof req.body !== "object" || !("source" in req.body)) delete input.source;
     res.json({ expense: await svc.updateExpense(uid(req), req.params.id, input, reqTimezone(req)) });
   }),

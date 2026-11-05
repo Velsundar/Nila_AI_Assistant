@@ -16,11 +16,13 @@ function pick(result: unknown, key: string): Record<string, unknown> {
 }
 
 /** Which kind of chip to show (drives the chip's icon). */
-export type ActionKind = "expense" | "income" | "budget" | "reminder" | "task" | "note" | "weather" | "briefing" | "report" | "memory" | "other";
+export type ActionKind = "expense" | "income" | "money" | "budget" | "reminder" | "task" | "note" | "weather" | "briefing" | "report" | "memory" | "other";
 
 export function actionKind(tool: string): ActionKind {
   const t = tool.toLowerCase();
   if (/weather|forecast/.test(t)) return "weather";
+  // getMoneyOverview (balance / trends): before "income" and "expense".
+  if (/overview|balance|ledger|trend|saving/.test(t)) return "money";
   // Before "summary"/"expense": manageIncome's summary action is about money received, not spent.
   if (/income|salary|received/.test(t)) return "income";
   if (/brief/.test(t)) return "briefing";
@@ -37,6 +39,7 @@ export function actionKind(tool: string): ActionKind {
 export const ACTION_ICON: Record<ActionKind, string> = {
   expense: "₹",
   income: "↓",
+  money: "⚖",
   budget: "◔",
   reminder: "⏰",
   task: "☑",
@@ -109,7 +112,11 @@ export function describeAction(a: AgentAction, currency = "INR"): string {
       if (/(set|upsert|create|update)/.test(tool)) return join("Budget set", category, money && `${money}/mo`);
       return "Checked budgets";
     case "reminder":
-      if (/(delete|remove)/.test(tool)) return "Reminder removed";
+      if (/(delete|remove)/.test(tool)) {
+        // deleteReminder → { deleted: "<reminder text>" }
+        const deleted = a.result && typeof a.result === "object" ? (a.result as Record<string, unknown>).deleted : undefined;
+        return join("Reminder deleted", clip(str(deleted) ?? str(a.args.query)));
+      }
       if (/(done|complete)/.test(tool)) return "Reminder done";
       if (/(add|create|set)/.test(tool)) return join("Reminder set", clip(str(args.text)));
       return "Checked reminders";
@@ -130,6 +137,25 @@ export function describeAction(a: AgentAction, currency = "INR"): string {
         return join("Checked income", total !== undefined ? formatMoney(total, currency) : undefined);
       }
       return "Looked up income";
+    }
+    case "money": {
+      // getMoneyOverview { view: "balance" | "trends", months? } → a Ledger-like or TrendsResult-like object.
+      const r = (a.result && typeof a.result === "object" ? a.result : {}) as Record<string, unknown>;
+      const view = str(a.args.view)?.toLowerCase() ?? (/trend/.test(tool) ? "trends" : "balance");
+      if (view === "trends") {
+        const t = pick(r, "trends");
+        const change = num(t.spentChangePercent);
+        const months = num(a.args.months) ?? (Array.isArray(t.months) ? t.months.length : undefined);
+        return join(
+          "Checked trends",
+          months !== undefined ? `${months} months` : undefined,
+          change !== undefined ? `${change > 0 ? "+" : change < 0 ? "−" : ""}${Math.abs(Math.round(change))}% spending` : undefined,
+        );
+      }
+      const l = pick(r, "ledger");
+      const totals = (l.totals && typeof l.totals === "object" ? l.totals : l) as Record<string, unknown>;
+      const balance = num(totals.balance);
+      return join("Balance", balance !== undefined ? formatMoney(balance, currency) : undefined);
     }
     case "expense":
       if (/(add|create|log|record)/.test(tool)) return join(`Added ${money ?? "expense"}`, category, merchant);

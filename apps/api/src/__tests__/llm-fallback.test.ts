@@ -143,13 +143,15 @@ describe("token diet", () => {
     const json = JSON.stringify(TOOL_DEFINITIONS);
     for (const k of ["maxLength", "minLength", "exclusiveMinimum", "maximum", "additionalProperties", "maxItems"]) expect(json).not.toContain(`"${k}"`);
     const byName = Object.fromEntries(TOOL_DEFINITIONS.map((t) => [t.function.name, t.function.parameters as { properties: Record<string, { enum?: string[] }> }]));
-    expect(byName.addExpense.properties.category.enum).toContain("Food");
+    expect(byName.addExpense.properties.category.enum).toBeUndefined();
     expect(byName.getSpendingSummary.properties.category.enum).toBeUndefined();
     expect(byName.manageTask.properties.ids).toBeUndefined();
     expect(byName.manageNote.properties.noteId).toBeUndefined();
     expect(byName.manageTask.properties.action.enum).toEqual(["add", "list", "complete", "delete"]);
-    // ~4 chars per token; raised from 5500 when manageIncome was added (~150 tokens per call).
-    expect(json.length).toBeLessThan(6000);
+    // ~4 chars per token; raised from 5500 when manageIncome was added (~150 tokens per call), and
+    // from 6000 in v5 for deleteReminder, getMoneyOverview, subcategory and the longer category list
+    // (~125 tokens). Hard ceiling 6800: Groq's free tier is 8k tokens/min.
+    expect(json.length).toBeLessThan(6600);
   });
 
   it("lets optional tool args be null so Groq doesn't reject the call", () => {

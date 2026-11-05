@@ -6,6 +6,7 @@ const expenseSchema = new Schema(
     userId: { type: Schema.Types.ObjectId, ref: "User", required: true },
     amount: { type: Number, required: true, min: 0 },
     category: { type: String, enum: CATEGORIES, required: true },
+    subcategory: { type: String, trim: true, maxlength: 40 },
     merchant: { type: String, trim: true },
     note: { type: String, trim: true },
     date: { type: Date, required: true },

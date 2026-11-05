@@ -1,8 +1,8 @@
 import { useFocusEffect } from "expo-router";
 import { useCallback, useRef, useState } from "react";
-import { ActivityIndicator, KeyboardAvoidingView, Platform, RefreshControl, ScrollView, StyleSheet, Text, View } from "react-native";
+import { ActivityIndicator, Alert, KeyboardAvoidingView, Platform, RefreshControl, ScrollView, StyleSheet, Text, View } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
-import type { DailyBriefing, Note, Task } from "@nova/shared";
+import type { DailyBriefing, Note, Reminder, Task } from "@nova/shared";
 
 import { BriefingCard } from "@/components/BriefingCard";
 import { NotesSection } from "@/components/NotesSection";
@@ -73,6 +73,32 @@ export default function TodayScreen() {
   // (quietly — current data stays on screen) and marks the other tabs stale.
   const onLocalChange = invalidateData;
 
+  // Same flow as the expense delete: native confirm, optimistic removal, restored on failure.
+  const confirmDeleteReminder = (r: Reminder) => {
+    Alert.alert("Delete reminder?", r.text, [
+      { text: "Cancel", style: "cancel" },
+      {
+        text: "Delete",
+        style: "destructive",
+        onPress: async () => {
+          const without = (b: DailyBriefing | null) => (b ? { ...b, reminders: b.reminders.filter((x) => x.id !== r.id) } : b);
+          setBriefing(without);
+          try {
+            await api.reminders.remove(r.id);
+            invalidateData(); // the briefing text mentions it too: refetch quietly
+          } catch (e) {
+            setBriefing((b) =>
+              b && !b.reminders.some((x) => x.id === r.id)
+                ? { ...b, reminders: [...b.reminders, r].sort((x, y) => x.dateTime.localeCompare(y.dateTime)) }
+                : b,
+            );
+            Alert.alert("Couldn't delete", errorMessage(e));
+          }
+        },
+      },
+    ]);
+  };
+
   const dateLabel = new Date().toLocaleDateString("en-IN", { weekday: "long", day: "numeric", month: "long" });
 
   return (
@@ -114,6 +140,7 @@ export default function TodayScreen() {
                   hasCity={!!user?.city}
                   speaking={speaker.speaking}
                   onReadAloud={() => speaker.toggle(briefing.text)}
+                  onDeleteReminder={confirmDeleteReminder}
                 />
               )}
               <TasksSection tasks={tasks} setTasks={setTasks} onChanged={onLocalChange} />

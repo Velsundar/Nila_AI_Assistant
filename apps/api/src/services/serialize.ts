@@ -1,5 +1,5 @@
 import type { Category, Expense, Income, IncomeCategory, Note, Reminder, Task, TaskPriority, User, ExpenseSource } from "@nova/shared";
-import { ASSISTANT_NAME, DEFAULT_CURRENCY } from "@nova/shared";
+import { ASSISTANT_NAME, DEFAULT_CURRENCY, LEGACY_CATEGORIES } from "@nova/shared";
 
 type Id = { toString(): string };
 const iso = (d: Date | string | undefined | null) => (d ? new Date(d).toISOString() : new Date(0).toISOString());
@@ -28,6 +28,7 @@ export function toExpense(e: {
   _id: Id;
   amount: number;
   category: string;
+  subcategory?: string | null;
   merchant?: string | null;
   note?: string | null;
   date: Date;
@@ -37,7 +38,8 @@ export function toExpense(e: {
   return {
     id: e._id.toString(),
     amount: e.amount,
-    category: e.category as Category,
+    category: (LEGACY_CATEGORIES[e.category] ?? e.category) as Category,
+    ...(e.subcategory ? { subcategory: e.subcategory } : {}),
     ...(e.merchant ? { merchant: e.merchant } : {}),
     ...(e.note ? { note: e.note } : {}),
     date: iso(e.date),

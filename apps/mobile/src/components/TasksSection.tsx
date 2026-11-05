@@ -1,13 +1,15 @@
 import Ionicons from "@expo/vector-icons/Ionicons";
 import * as Haptics from "expo-haptics";
-import { useMemo, useState, type Dispatch, type ReactNode, type SetStateAction } from "react";
+import { useMemo, useState, type Dispatch, type SetStateAction } from "react";
 import { Alert, Pressable, StyleSheet, Text, TextInput, View } from "react-native";
 import { CreateTaskSchema, DEFAULT_TASK_LIST, type Task, type TaskPriority } from "@nova/shared";
 
+import { TaskDetailsSheet } from "@/components/TaskDetailsSheet";
+import { Chip, ChipRow, DUE_CHOICES, PRIORITIES, SUGGESTED_LISTS, dueFor, sameList, type DueChoice } from "@/components/task-options";
 import { Banner, Card, SectionTitle } from "@/components/ui";
 import { Colors, Font, HitSize, Radius, Spacing } from "@/constants/theme";
 import { api, errorMessage } from "@/lib/api";
-import { addDays, dueLabel, localISODate } from "@/lib/format";
+import { dueLabel } from "@/lib/format";
 
 type Props = {
   tasks: Task[];
@@ -15,30 +17,6 @@ type Props = {
   /** Something changed (so other screens / the briefing can refresh). */
   onChanged: () => void;
 };
-
-type DueChoice = "none" | "today" | "tomorrow" | "week";
-const DUE_CHOICES: { key: DueChoice; label: string }[] = [
-  { key: "none", label: "No date" },
-  { key: "today", label: "Today" },
-  { key: "tomorrow", label: "Tomorrow" },
-  { key: "week", label: "Next week" },
-];
-const PRIORITIES: { key: TaskPriority; label: string; color: string }[] = [
-  { key: "low", label: "Low", color: Colors.textDim },
-  { key: "normal", label: "Normal", color: Colors.primary },
-  { key: "high", label: "High", color: Colors.danger },
-];
-const SUGGESTED_LISTS = [DEFAULT_TASK_LIST, "Shopping", "Work", "Personal"];
-
-function dueFor(choice: DueChoice): string | undefined {
-  const now = new Date();
-  if (choice === "today") return localISODate(now);
-  if (choice === "tomorrow") return localISODate(addDays(now, 1));
-  if (choice === "week") return localISODate(addDays(now, 7));
-  return undefined;
-}
-
-const sameList = (a: string, b: string) => a.trim().toLowerCase() === b.trim().toLowerCase();
 
 export function TasksSection({ tasks, setTasks, onChanged }: Props) {
   const [title, setTitle] = useState("");
@@ -50,6 +28,9 @@ export function TasksSection({ tasks, setTasks, onChanged }: Props) {
   const [adding, setAdding] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [showDone, setShowDone] = useState<Record<string, boolean>>({});
+  /** Task whose details sheet is open. Looked up live so toggles/edits show in the sheet. */
+  const [detailsId, setDetailsId] = useState<string | null>(null);
+  const detailsTask = detailsId ? (tasks.find((t) => t.id === detailsId) ?? null) : null;
 
   /** Lists in a stable order: Inbox first, then by first appearance. */
   const groups = useMemo(() => {
@@ -141,6 +122,11 @@ export function TasksSection({ tasks, setTasks, onChanged }: Props) {
     ]);
   }
 
+  const onSaved = (task: Task) => {
+    setTasks((ts) => ts.map((x) => (x.id === task.id ? task : x)));
+    onChanged();
+  };
+
   return (
     <View>
       <SectionTitle>Tasks</SectionTitle>
@@ -230,7 +216,7 @@ export function TasksSection({ tasks, setTasks, onChanged }: Props) {
                 </Text>
               )}
               {g.open.map((t) => (
-                <TaskRow key={t.id} task={t} onToggle={() => void toggle(t)} onDelete={() => confirmDelete(t)} />
+                <TaskRow key={t.id} task={t} onToggle={() => void toggle(t)} onOpen={() => setDetailsId(t.id)} onDelete={() => confirmDelete(t)} />
               ))}
               {g.done.length > 0 && (
                 <Pressable
@@ -245,83 +231,82 @@ export function TasksSection({ tasks, setTasks, onChanged }: Props) {
                   </Text>
                 </Pressable>
               )}
-              {doneOpen && g.done.map((t) => <TaskRow key={t.id} task={t} onToggle={() => void toggle(t)} onDelete={() => confirmDelete(t)} />)}
+              {doneOpen &&
+                g.done.map((t) => (
+                  <TaskRow key={t.id} task={t} onToggle={() => void toggle(t)} onOpen={() => setDetailsId(t.id)} onDelete={() => confirmDelete(t)} />
+                ))}
             </View>
           );
         })}
-        <Text style={[styles.small, { textAlign: "center" }]}>Tap the circle to complete · long-press to delete</Text>
+        <Text style={[styles.small, { textAlign: "center" }]}>Tap the circle to complete · tap a task for details · long-press to delete</Text>
       </View>
+
+      <TaskDetailsSheet
+        task={detailsTask}
+        lists={groups.map((g) => g.name)}
+        onClose={() => setDetailsId(null)}
+        onSaved={onSaved}
+        onDelete={confirmDelete}
+      />
     </View>
   );
 }
 
-function TaskRow({ task: t, onToggle, onDelete }: { task: Task; onToggle: () => void; onDelete: () => void }) {
+function TaskRow({ task: t, onToggle, onOpen, onDelete }: { task: Task; onToggle: () => void; onOpen: () => void; onDelete: () => void }) {
   const due = dueLabel(t.dueDate);
   const dueColor = due?.tone === "overdue" ? Colors.danger : due?.tone === "today" ? Colors.warning : Colors.textDim;
   const label = [t.title, t.done ? "completed" : null, due?.text, t.priority !== "normal" ? `${t.priority} priority` : null]
     .filter(Boolean)
     .join(", ");
+  // Two siblings (not nested) so screen readers reach both: the circle toggles done, the rest opens details.
   return (
-    <Pressable
-      onPress={onToggle}
-      onLongPress={onDelete}
-      delayLongPress={350}
-      accessibilityRole="checkbox"
-      accessibilityState={{ checked: t.done }}
-      accessibilityLabel={label}
-      accessibilityHint="Tap to toggle done. Long press to delete."
-      accessibilityActions={[{ name: "delete", label: "Delete task" }]}
-      onAccessibilityAction={(e) => e.nativeEvent.actionName === "delete" && onDelete()}
-      style={({ pressed }) => [styles.row, pressed && { backgroundColor: Colors.surfaceAlt }]}
-    >
-      <Ionicons
-        name={t.done ? "checkmark-circle" : "ellipse-outline"}
-        size={24}
-        color={t.done ? Colors.success : t.priority === "high" ? Colors.danger : Colors.borderStrong}
-      />
-      <View style={{ flex: 1, gap: 2 }}>
-        <Text style={[styles.title, t.done && styles.titleDone]} numberOfLines={2}>
-          {t.title}
-        </Text>
-        {(due || t.priority !== "normal") && !t.done && (
-          <View style={styles.meta}>
-            {due && <Text style={[styles.small, { color: dueColor, fontWeight: "700" }]}>{due.text}</Text>}
-            {t.priority === "high" && (
-              <View style={styles.meta}>
-                <Ionicons name="flag" size={11} color={Colors.danger} />
-                <Text style={[styles.small, { color: Colors.danger }]}>High</Text>
-              </View>
-            )}
-            {t.priority === "low" && <Text style={[styles.small, { color: Colors.textFaint }]}>Low</Text>}
-          </View>
-        )}
-      </View>
-    </Pressable>
-  );
-}
-
-function ChipRow({ label, children }: { label: string; children: ReactNode }) {
-  return (
-    <View style={{ gap: 6 }}>
-      <Text style={styles.optLabel}>{label}</Text>
-      <View style={styles.chips} accessibilityRole="radiogroup" accessibilityLabel={label}>
-        {children}
-      </View>
+    <View style={styles.row}>
+      <Pressable
+        onPress={onToggle}
+        accessibilityRole="checkbox"
+        accessibilityState={{ checked: t.done }}
+        accessibilityLabel={t.title}
+        accessibilityHint={t.done ? "Marks the task as not done" : "Marks the task as done"}
+        hitSlop={4}
+        style={({ pressed }) => [styles.check, pressed && { opacity: 0.6 }]}
+      >
+        <Ionicons
+          name={t.done ? "checkmark-circle" : "ellipse-outline"}
+          size={24}
+          color={t.done ? Colors.success : t.priority === "high" ? Colors.danger : Colors.borderStrong}
+        />
+      </Pressable>
+      <Pressable
+        onPress={onOpen}
+        onLongPress={onDelete}
+        delayLongPress={350}
+        accessibilityRole="button"
+        accessibilityLabel={label}
+        accessibilityHint="Opens task details. Long press to delete."
+        accessibilityActions={[{ name: "delete", label: "Delete task" }]}
+        onAccessibilityAction={(e) => e.nativeEvent.actionName === "delete" && onDelete()}
+        style={({ pressed }) => [styles.rowBody, pressed && { backgroundColor: Colors.surfaceAlt }]}
+      >
+        <View style={{ flex: 1, gap: 2 }}>
+          <Text style={[styles.title, t.done && styles.titleDone]} numberOfLines={2}>
+            {t.title}
+          </Text>
+          {(due || t.priority !== "normal") && !t.done && (
+            <View style={styles.meta}>
+              {due && <Text style={[styles.small, { color: dueColor, fontWeight: "700" }]}>{due.text}</Text>}
+              {t.priority === "high" && (
+                <View style={styles.meta}>
+                  <Ionicons name="flag" size={11} color={Colors.danger} />
+                  <Text style={[styles.small, { color: Colors.danger }]}>High</Text>
+                </View>
+              )}
+              {t.priority === "low" && <Text style={[styles.small, { color: Colors.textFaint }]}>Low</Text>}
+            </View>
+          )}
+        </View>
+        <Ionicons name="chevron-forward" size={16} color={Colors.textFaint} />
+      </Pressable>
     </View>
-  );
-}
-
-function Chip({ label, selected, onPress, color = Colors.primary }: { label: string; selected: boolean; onPress: () => void; color?: string }) {
-  return (
-    <Pressable
-      onPress={onPress}
-      accessibilityRole="radio"
-      accessibilityState={{ selected }}
-      accessibilityLabel={label}
-      style={[styles.chip, selected && { borderColor: color, backgroundColor: `${color}22` }]}
-    >
-      <Text style={[styles.chipText, selected && { color: Colors.text }]}>{label}</Text>
-    </Pressable>
   );
 }
 
@@ -359,32 +344,19 @@ const styles = StyleSheet.create({
   },
   addBtn: { width: HitSize, height: HitSize, borderRadius: Radius.md, backgroundColor: Colors.primary, alignItems: "center", justifyContent: "center" },
   options: { gap: Spacing.md },
-  optLabel: { color: Colors.textDim, ...Font.small, fontWeight: "600" },
-  chips: { flexDirection: "row", flexWrap: "wrap", gap: 6 },
-  chip: {
-    borderWidth: 1,
-    borderColor: Colors.border,
-    borderRadius: Radius.pill,
-    paddingHorizontal: Spacing.md,
-    minHeight: 34,
-    justifyContent: "center",
-    backgroundColor: Colors.bgElevated,
-  },
-  chipText: { color: Colors.textDim, ...Font.small, fontWeight: "600" },
   group: { backgroundColor: Colors.surface, borderRadius: Radius.lg, borderWidth: 1, borderColor: Colors.border, overflow: "hidden" },
   groupHeader: { flexDirection: "row", alignItems: "center", gap: Spacing.sm, paddingHorizontal: Spacing.lg, paddingVertical: Spacing.md },
   groupName: { color: Colors.text, ...Font.h3, flex: 1 },
   count: { color: Colors.textFaint, ...Font.small, fontWeight: "700" },
   row: {
     flexDirection: "row",
-    alignItems: "center",
-    gap: Spacing.md,
-    paddingHorizontal: Spacing.lg,
-    paddingVertical: Spacing.sm,
+    alignItems: "stretch",
     minHeight: 52,
     borderTopWidth: StyleSheet.hairlineWidth,
     borderTopColor: Colors.border,
   },
+  check: { width: HitSize + Spacing.lg, paddingLeft: Spacing.lg, justifyContent: "center" },
+  rowBody: { flex: 1, flexDirection: "row", alignItems: "center", gap: Spacing.sm, paddingVertical: Spacing.sm, paddingRight: Spacing.lg },
   title: { color: Colors.text, ...Font.body },
   titleDone: { color: Colors.textFaint, textDecorationLine: "line-through" },
   meta: { flexDirection: "row", alignItems: "center", gap: Spacing.sm },

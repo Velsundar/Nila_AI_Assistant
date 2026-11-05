@@ -1,11 +1,12 @@
 import { Types, isValidObjectId } from "mongoose";
 import type { Category, CreateExpenseInput, Expense, SpendingSummary, UpdateExpenseInput } from "@nova/shared";
-import { CATEGORIES } from "@nova/shared";
+import { CATEGORIES, SUBCATEGORIES } from "@nova/shared";
 import { ExpenseModel } from "../models/Expense";
 import { notFound } from "../errors";
 import { parseExpenseDate, resolveRange, resolveTimezone } from "./dates";
 import { HttpError } from "../errors";
 import { round2, toExpense } from "./serialize";
+import { classifyExpense, snapSubcategory } from "./categories";
 
 const oid = (id: string) => new Types.ObjectId(id);
 
@@ -16,13 +17,21 @@ export function money2(n: number, field = "amount"): number {
   return v;
 }
 
-export async function createExpense(userId: string, input: CreateExpenseInput, tz: string): Promise<Expense> {
+/** `category` may be omitted (or "Other"): it is then inferred from merchant/note, like the subcategory. */
+export async function createExpense(
+  userId: string,
+  input: Omit<CreateExpenseInput, "category"> & { category?: Category },
+  tz: string,
+): Promise<Expense> {
+  const merchant = input.merchant?.trim() || undefined;
+  const c = classifyExpense({ category: input.category, subcategory: input.subcategory, merchant, note: input.note });
   const doc = await ExpenseModel.create({
     userId: oid(userId),
     amount: money2(input.amount),
-    category: input.category,
-    merchant: input.merchant?.trim() || undefined,
-    note: input.note?.trim() || undefined,
+    category: c.category,
+    subcategory: c.subcategory,
+    merchant,
+    note: (c.note ?? input.note)?.trim() || undefined,
     date: parseExpenseDate(input.date, tz),
     source: input.source ?? "manual",
   });
@@ -66,6 +75,26 @@ export async function updateExpense(userId: string, id: string, input: UpdateExp
   if (input.category !== undefined) set.category = input.category;
   if (input.source !== undefined) set.source = input.source;
   if (input.date !== undefined) set.date = parseExpenseDate(input.date, tz);
+  if (input.subcategory !== undefined || input.category !== undefined) {
+    // Subcategories belong to a category: snap a new one to it, and re-infer (or drop) the old one
+    // when only the category changes.
+    const cur = await ExpenseModel.findOne({ _id: id, userId: oid(userId) }).lean();
+    if (!cur) throw notFound("Expense");
+    const cat = (input.category ?? cur.category) as Category;
+    if (input.subcategory !== undefined) {
+      const sub = input.subcategory.trim() ? snapSubcategory(cat, input.subcategory) : undefined;
+      if (sub) set.subcategory = sub;
+      else unset.subcategory = 1;
+    } else if (cat !== cur.category) {
+      const keep = cur.subcategory && snapSubcategory(cat, cur.subcategory);
+      const sub =
+        keep && SUBCATEGORIES[cat].includes(keep)
+          ? keep
+          : classifyExpense({ category: cat, merchant: input.merchant ?? cur.merchant ?? undefined, note: input.note ?? cur.note ?? undefined }).subcategory;
+      if (sub) set.subcategory = sub;
+      else unset.subcategory = 1;
+    }
+  }
   for (const k of ["merchant", "note"] as const) {
     if (input[k] !== undefined) {
       const v = input[k]?.trim();
@@ -109,6 +138,7 @@ export async function getSummary(
     totals: { total: number; count: number }[];
     byCategory: { _id: string; total: number; count: number }[];
     byDay: { _id: string; total: number }[];
+    bySubcategory?: { _id: string | null; total: number; count: number }[];
   }>([
     { $match: match },
     {
@@ -122,6 +152,14 @@ export async function getSummary(
           { $group: { _id: { $dateToString: { format: "%Y-%m-%d", date: "$date", timezone: tz } }, total: { $sum: "$amount" } } },
           { $sort: { _id: 1 } },
         ],
+        ...(q.category
+          ? {
+              bySubcategory: [
+                { $group: { _id: { $ifNull: ["$subcategory", "Other"] }, total: { $sum: "$amount" }, count: { $sum: 1 } } },
+                { $sort: { total: -1, _id: 1 } },
+              ],
+            }
+          : {}),
       },
     },
   ]);
@@ -136,5 +174,19 @@ export async function getSummary(
       .filter((c) => (CATEGORIES as readonly string[]).includes(c._id))
       .map((c) => ({ category: c._id as Category, total: round2(c.total), count: c.count })),
     byDay: (res?.byDay ?? []).map((d) => ({ date: d._id, total: round2(d.total) })),
+    ...(q.category ? { bySubcategory: mergeSubcategories(res?.bySubcategory ?? []) } : {}),
   };
+}
+
+/** "" and missing both count as "Other"; merge them after the $group. */
+function mergeSubcategories(rows: { _id: string | null; total: number; count: number }[]) {
+  const m = new Map<string, { total: number; count: number }>();
+  for (const r of rows) {
+    const k = r._id?.trim() || "Other";
+    const cur = m.get(k) ?? { total: 0, count: 0 };
+    m.set(k, { total: cur.total + r.total, count: cur.count + r.count });
+  }
+  return [...m.entries()]
+    .map(([subcategory, v]) => ({ subcategory, total: round2(v.total), count: v.count }))
+    .sort((a, b) => b.total - a.total || a.subcategory.localeCompare(b.subcategory));
 }

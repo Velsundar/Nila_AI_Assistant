@@ -71,3 +71,28 @@ Income lives in its own collection (`incomes`), so `/api/expenses/summary`, budg
 Client: `api.income.{list, create, update, remove, summary}`.
 
 Agent: the `manageIncome` tool (`add` / `list` / `summary` / `delete`, where delete is confirmed). The prompt routes "received / credited / salary / X gave me" to it, never to `addExpense`. Clients should refresh when `actions` contains `manageIncome`.
+
+## v5: categories + subcategories, ledger (balance), trends, reminder delete
+
+**Categories** (`CATEGORIES`): Food, Groceries, Shopping, Housing, Rent, Transportation, Vehicle, Bills, Life & Entertainment, Health, Education, Travel, Investments, Savings & Insurance, Other.
+- Renamed: Transport → Transportation, Entertainment → Life & Entertainment (`LEGACY_CATEGORIES`). The server migrates stored expenses and budgets at startup (idempotent) and accepts the old names on input.
+- `SUBCATEGORIES[category]` lists the suggested subcategories. `Expense.subcategory` is optional free text (≤ 40 chars). The server infers it from merchant/note when it's omitted (swiggy → Food/Swiggy, rapido → Transportation/Rapido, netflix → Life & Entertainment/OTT, petrol → Vehicle/Fuel, "sent to dad" → Investments/Sent to Dad, term insurance → Savings & Insurance/Term insurance) and snaps near-matches to the listed spelling.
+- `categoryGroup(c)`: Investments and Savings & Insurance are **"saving"** (reported as *invested*), everything else is **"spending"**.
+- `GET /api/expenses/summary?category=X` also returns `bySubcategory`.
+
+| Method | Path | Query | Response |
+|---|---|---|---|
+| GET | /api/ledger | `?period=cycle` (default) or `?period=month&month=YYYY-MM` | `Ledger` |
+| GET | /api/insights/trends | `?months=6` (2–12) | `TrendsResult` |
+
+**Ledger:** income and expenses merged oldest first, with a running `balance` per entry. Totals are `{ received, spent, invested, balance = received − spent − invested }`. `period=cycle` starts at the latest **Salary** income (within 45 days), otherwise the calendar month; the balance resets there, with no carry-over. Response `period` is `"salary-cycle"`, `"month"` or `"custom"`.
+
+**Trends:** per month `{ received, spent, invested, saved = received − spent, savingsRate, topCategories }`, plus `spentChangePercent` (this month vs last), `categoryChanges` and `averageMonthlySpent` (complete months only).
+
+**Client:** `api.ledger(query)`, `api.trends(query)`, `api.reminders.remove(id)` (already existed), `api.tasks.update` / `remove` (already existed).
+
+**Agent tools (new):**
+- `deleteReminder`: matched by text or the next upcoming one. Destructive, confirmed.
+- `getMoneyOverview` `{ view: "balance" | "trends", months? }`: balance for the cycle, or the trends analysis. Use it for "what's my balance", "how much did I save", "compare with last month", "spending trend".
+- "Last month" spending keeps using `getSpendingSummary` with from/to.
+- `addExpense` accepts `subcategory`.

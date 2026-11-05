@@ -115,7 +115,7 @@ describe("GET /api/reports/weekly", () => {
     // week of 2026-09-07 .. 2026-09-13
     await add(400, "Food", "2026-09-07", "Swiggy");
     await add(300, "Food", "2026-09-13", "swiggy");
-    await add(500, "Transport", "2026-09-10", "Uber");
+    await add(500, "Transportation", "2026-09-10", "Uber");
     await add(99, "Food", "2026-09-14", "Swiggy"); // next week, excluded
     // previous week
     await add(1000, "Shopping", "2026-09-02", "Amazon");
@@ -130,7 +130,7 @@ describe("GET /api/reports/weekly", () => {
       changePercent: 20,
       byCategory: [
         { category: "Food", total: 700, count: 2 },
-        { category: "Transport", total: 500, count: 1 },
+        { category: "Transportation", total: 500, count: 1 },
       ],
       topMerchants: [
         { merchant: "Swiggy", total: 700, count: 2 },

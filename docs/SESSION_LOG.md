@@ -246,3 +246,33 @@ apps/web (Next.js)     apps/mobile (Expo)
   - Tests: API 216/216, mobile voice 65/65, typecheck clean.
 - **Git:** the working tree had a blanket `git rm -r --cached .` staged. Re-adding was verified to produce an identical tree, then it was unstaged with `git reset` (no file changes).
 - **Open:** Vercel deploy for web (`NEXT_PUBLIC_API_URL=https://nila-ai-assistant.onrender.com`, then add the Vercel URL to Render `CORS_ORIGINS`); EAS APK; income in the daily briefing / weekly report; date field on mobile add-income; 28 pre-existing mobile lint errors.
+
+## 2026-11-05 — v5: categories + subcategories, balance (salary cycle), trends, reminder delete, task details
+
+Three parallel agents (api, web, mobile) worked from a contract the coordinator wrote in `packages/shared` + `docs/API.md` "v5".
+- **Categories:**
+  - The list is now Food, Groceries, Shopping, Housing, Rent, Transportation, Vehicle, Bills, Life & Entertainment, Health, Education, Travel, Investments, Savings & Insurance, Other. Transport → Transportation and Entertainment → Life & Entertainment, migrated idempotently at API startup. The migration already ran on Atlas through the local dev server: 34 + 7 expenses and the budgets renamed, no legacy names left.
+  - `SUBCATEGORIES` gives suggested values; `Expense.subcategory` is free text, inferred from merchant/note (`apps/api/src/services/categories.ts`).
+  - Investments and Savings & Insurance count as *invested/saved*, not spent.
+- **Ledger** `GET /api/ledger`: income + expenses oldest first with a running balance. It resets at the latest Salary income (within 45 days), otherwise the calendar month.
+- **Trends** `GET /api/insights/trends?months=6`: received/spent/invested/saved, savings rate, change vs last month, category movers.
+- **Agent:**
+  - New tools `deleteReminder` (confirmed) and `getMoneyOverview` (balance | trends); `addExpense` takes a subcategory.
+  - The category enum was removed from all tool schemas: Groq rejected the whole call when the model sent "Insurance". Unknown categories now become Other, then get inferred. `addExpense.category` is no longer required.
+  - Tool schemas total 6,324 chars, with the cap raised to 6,600.
+- **Web:**
+  - Pie chart fix: delete only filtered the list. The summary now updates in the same frame, refetches are independent, colours are fixed per category, and the page refreshes when the tab becomes visible.
+  - Slice → subcategory drill-down.
+  - Balance card (passbook) and Trends card.
+  - Reminder delete in the briefing card.
+  - Task row opens details (edit/delete); only the checkbox toggles done.
+- **Mobile:** the same features on the Expenses/Today tabs (BalanceSection, TrendsSection, TaskDetailsSheet, subcategory chips, reminder delete).
+- **Real Groq check (scratch DB):** at realistic pacing (~20 s apart) all phrases routed correctly (salary, Swiggy, sent to Dad, term insurance, reminder delete with confirm, balance ₹63,500, trends). A rapid-fire run (4 s apart) hit the 8k TPM limit and fell back to gpt-oss-20b/qwen, which produced garbled or hallucinated replies. **The free-tier rate limit is the main quality risk.**
+- **Tests:** API 282/282, mobile voice 65/65, all 4 packages typecheck, web production build passes, Android export builds.
+- **Leftover:** the web agent's e2e run created the Atlas user `web-v5-e2e-…@example.test`; its data was removed, but there's no endpoint to delete the user itself.
+- **Open:**
+  - no full reminders list (only today's, in the briefing);
+  - the "Spent this month" tile still includes Investments;
+  - receipts don't prefill a subcategory;
+  - no user-delete endpoint;
+  - mitigate rate limits (shorter history, a lighter fallback, or a paid tier).

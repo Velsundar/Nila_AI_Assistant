@@ -55,6 +55,7 @@ const SUGGESTIONS = [
   "Plan my evening",
   "I spent 250 on lunch at Swiggy",
   "How did my spending go last week?",
+  "What's my balance?",
   "Remind me to call mom at 7pm",
 ];
 

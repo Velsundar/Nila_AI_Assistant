@@ -3,6 +3,7 @@ import { zodToJsonSchema } from "zod-to-json-schema";
 import { Types, isValidObjectId } from "mongoose";
 import { CATEGORIES, INCOME_CATEGORIES, type Category, type Expense, type Income, type IncomeCategory } from "@nova/shared";
 import { ExpenseModel } from "../models/Expense";
+import { ReminderModel } from "../models/Reminder";
 import { IncomeModel } from "../models/Income";
 import { MemoryModel } from "../models/Memory";
 import { BudgetModel } from "../models/Budget";
@@ -12,11 +13,14 @@ import * as budgets from "../services/budgets";
 import * as reminders from "../services/reminders";
 import * as tasks from "../services/tasks";
 import * as notes from "../services/notes";
-import { buildDailyBriefing, buildWeeklyReport } from "../services/insights";
+import { buildDailyBriefing, buildWeeklyReport, speakYmd } from "../services/insights";
 import { geocodeCity, getForecast, WeatherError } from "../services/weather";
 import { isDateOnly, localDateString, zonedToUtc } from "../services/dates";
-import { toExpense, toIncome } from "../services/serialize";
-import { formatMoney, speakDay } from "./format";
+import { toExpense, toIncome, toReminder } from "../services/serialize";
+import { formatMoney, speakDay, speakTime } from "./format";
+import { categoryFromKeywords, lookupCategory } from "../services/categories";
+import { getLedger } from "../services/ledger";
+import { getTrends } from "../services/trends";
 import type { ToolDefinition } from "./llm";
 
 export type ToolUser = {
@@ -53,28 +57,22 @@ export type Tool<S extends ZodTypeAny = ZodTypeAny> = {
 
 // ---------- shared arg schemas ----------
 
-const CATEGORY_ALIASES: Record<string, Category> = {
-  grocery: "Groceries",
-  transportation: "Transport",
-  travelling: "Travel",
-  bill: "Bills",
-  utilities: "Bills",
-  medical: "Health",
-  fun: "Entertainment",
-  shop: "Shopping",
-  misc: "Other",
-  miscellaneous: "Other",
-  dining: "Food",
-};
-
+/** Exact/legacy names and aliases first, then keywords ("petrol" → Vehicle); unknown values fail validation. */
 export function normalizeCategory(v: unknown): unknown {
   if (typeof v !== "string") return v;
-  const s = v.trim().toLowerCase();
-  const hit = CATEGORIES.find((c) => c.toLowerCase() === s);
-  return hit ?? CATEGORY_ALIASES[s] ?? v;
+  return lookupCategory(v) ?? categoryFromKeywords(v) ?? v;
 }
 
 const category = z.preprocess(normalizeCategory, z.enum(CATEGORIES));
+/**
+ * For logging spend: an unknown category becomes "Other" (the server then infers one from the
+ * merchant/note), because the schema sent to Groq has no enum and a strict enum there makes Groq
+ * reject the whole call when the model invents a name like "Insurance".
+ */
+const spendCategory = z.preprocess((v) => {
+  const n = normalizeCategory(v);
+  return (CATEGORIES as readonly unknown[]).includes(n) ? n : "Other";
+}, z.enum(CATEGORIES));
 
 export function normalizeIncomeCategory(v: unknown): unknown {
   if (typeof v !== "string") return v;
@@ -107,6 +105,7 @@ function brief(e: Expense, tz: string) {
     id: e.id,
     amount: e.amount,
     category: e.category,
+    ...(e.subcategory ? { subcategory: e.subcategory } : {}),
     ...(e.merchant ? { merchant: e.merchant } : {}),
     ...(e.note ? { note: e.note } : {}),
     date: localDateString(new Date(e.date), tz),
@@ -174,6 +173,33 @@ function reminderDate(s: string, tz: string): Date {
   return new Date(s);
 }
 
+/** "Pay rent" → "pay rent" for "the reminder to …" (keeps "UPS"-style acronyms). */
+const reminderText = (t: string) => t.replace(/^to\s+/i, "").replace(/^[A-Z](?=[a-z])/, (c) => c.toLowerCase());
+
+const REMINDER_STOP = new Set(["the", "my", "reminder", "reminders", "about", "for", "delete", "remove", "cancel", "that", "this"]);
+
+/** Closest pending reminder by shared words, or the next upcoming one when there's no query. */
+async function findReminder(ctx: ToolContext, query?: string) {
+  const uidFilter = { userId: oid(ctx.userId), done: false };
+  const words = (query ?? "").toLowerCase().replace(/[^a-z0-9\s]/g, " ").split(/\s+/).filter((w) => w.length > 1 && !REMINDER_STOP.has(w));
+  if (!words.length) {
+    const next =
+      (await ReminderModel.findOne({ ...uidFilter, dateTime: { $gte: ctx.now } }).sort({ dateTime: 1 }).lean()) ??
+      (await ReminderModel.findOne(uidFilter).sort({ dateTime: -1 }).lean());
+    if (!next) throw new ToolError("You have no pending reminders.");
+    return toReminder(next);
+  }
+  const all = await ReminderModel.find(uidFilter).sort({ dateTime: 1 }).limit(200).lean();
+  let best: { r: (typeof all)[number]; score: number } | undefined;
+  for (const r of all) {
+    const text = ` ${r.text.toLowerCase().replace(/[^a-z0-9\s]/g, " ")} `;
+    const score = words.filter((w) => text.includes(` ${w} `)).length / words.length;
+    if (score > 0 && (!best || score > best.score)) best = { r, score };
+  }
+  if (!best) throw new ToolError(`No reminder matches "${query}".`);
+  return toReminder(best.r);
+}
+
 // ---------- memory safety ----------
 
 /** Tool names (filled below) — a "fact" that names a tool is an attempt to steer the agent. */
@@ -216,9 +242,11 @@ function tool<S extends ZodTypeAny>(t: Tool<S>): Tool {
   return t as unknown as Tool;
 }
 
+const subcategory = z.string().max(40).optional();
 const updateFields = z.object({
   amount: money.optional(),
   category: category.optional(),
+  subcategory,
   merchant: z.string().max(100).optional(),
   note: z.string().max(500).optional(),
   date: dateStr.optional(),
@@ -253,7 +281,8 @@ export const TOOLS: Tool[] = [
     description: "Log money the user spent.",
     schema: z.object({
       amount: money,
-      category: category,
+      category: spendCategory,
+      subcategory,
       merchant: z.string().max(100).optional().describe("e.g. Swiggy"),
       note: z.string().max(500).optional().describe("e.g. lunch"),
       date: dateStr.optional().describe("Omit for today"),
@@ -297,7 +326,34 @@ export const TOOLS: Tool[] = [
         total: s.total,
         count: s.count,
         byCategory: s.byCategory,
+        ...(s.bySubcategory ? { bySubcategory: s.bySubcategory } : {}),
         ...(budget ? { budget } : {}),
+      };
+    },
+  }),
+  tool({
+    name: "getMoneyOverview",
+    description: "balance: received/spent/invested/left this pay cycle. trends: monthly spending and savings vs last month.",
+    schema: z.object({ view: z.enum(["balance", "trends"]), months: z.coerce.number().int().min(2).max(12).optional() }),
+    async execute(a, ctx) {
+      if (a.view === "balance") {
+        const l = await getLedger(ctx.userId, { period: "cycle" }, ctx.timezone, ctx.now);
+        return {
+          period: l.period,
+          from: localDateString(new Date(l.from), ctx.timezone),
+          to: localDateString(l.period === "salary-cycle" ? ctx.now : new Date(l.to), ctx.timezone),
+          ...l.totals,
+        };
+      }
+      // Trimmed for tokens: per-month totals only, top categories for the current month.
+      const t = await getTrends(ctx.userId, { months: a.months ?? 3 }, ctx.timezone, ctx.now);
+      const cur = t.months[t.months.length - 1]!;
+      return {
+        months: t.months.map(({ topCategories: _t, ...m }) => m),
+        thisMonthTop: cur.topCategories,
+        spentChangePercent: t.spentChangePercent,
+        categoryChanges: t.categoryChanges.slice(0, 3),
+        averageMonthlySpent: t.averageMonthlySpent,
       };
     },
   }),
@@ -312,11 +368,12 @@ export const TOOLS: Tool[] = [
     async prepare(a, ctx) {
       const { expenseId, match, ...changes } = a;
       const fields = Object.fromEntries(Object.entries(changes).filter(([, v]) => v !== undefined));
-      if (!Object.keys(fields).length) throw new ToolError("Nothing to change. Provide amount, category, merchant, note or date.");
+      if (!Object.keys(fields).length) throw new ToolError("Nothing to change. Provide amount, category, subcategory, merchant, note or date.");
       const target = await findTarget(ctx, expenseId, match);
       const parts: string[] = [];
       if (fields.amount !== undefined) parts.push(`the amount to ${formatMoney(fields.amount as number, ctx.currency)}`);
       if (fields.category) parts.push(`the category to ${fields.category}`);
+      if (fields.subcategory !== undefined) parts.push(fields.subcategory ? `the subcategory to ${fields.subcategory}` : "no subcategory");
       if (fields.merchant !== undefined) parts.push(`the merchant to ${fields.merchant}`);
       if (fields.note !== undefined) parts.push(`the note to ${fields.note}`);
       if (fields.date) parts.push(`the date to ${speakDay(String(fields.date), ctx.timezone, ctx.now).replace(/^on /, "")}`);
@@ -469,6 +526,25 @@ export const TOOLS: Tool[] = [
       const list = await reminders.listReminders(ctx.userId, { onlyPending: true, limit: 10 });
       return { reminders: list.map((r) => ({ text: r.text, dateTime: r.dateTime })) };
     },
+  }),
+  tool({
+    name: "deleteReminder",
+    description: "Delete a reminder by text (query), else the next one. Confirmed automatically.",
+    destructive: true,
+    schema: z.object({ query: z.string().max(200).optional(), reminderId: z.string().optional() }),
+    hiddenArgs: ["reminderId"],
+    async prepare(a, ctx) {
+      const r = await findReminder(ctx, a.query);
+      const when = `${speakDay(r.dateTime, ctx.timezone, ctx.now)} at ${speakTime(r.dateTime, ctx.timezone)}`;
+      return { args: { reminderId: r.id }, summary: `Delete the reminder to ${reminderText(r.text)} ${when}?` };
+    },
+    async execute(a, ctx) {
+      if (!a.reminderId || !isValidObjectId(a.reminderId)) throw new ToolError("Nothing to delete");
+      const gone = await ReminderModel.findOneAndDelete({ _id: a.reminderId, userId: oid(ctx.userId) }).lean();
+      if (!gone) throw new ToolError("That reminder no longer exists.");
+      return { deleted: gone.text };
+    },
+    confirmedReply: (r) => `Done, I deleted the reminder to ${reminderText(r.deleted)}.`,
   }),
   tool({
     name: "manageTask",
@@ -674,9 +750,8 @@ export const TOOL_MAP = new Map(TOOLS.map((t) => [t.name, t]));
 TOOL_NAMES_LOWER.push(...TOOLS.map((t) => t.name.toLowerCase()));
 
 /** Only addExpense carries the category enum; the others reference it to save prompt tokens. */
-const CATEGORY_ENUM_TOOL = "addExpense";
 
-function jsonSchemaFor(schema: ZodTypeAny, opts: { hide?: string[]; categoryEnum?: boolean } = {}): Record<string, unknown> {
+function jsonSchemaFor(schema: ZodTypeAny, opts: { hide?: string[] } = {}): Record<string, unknown> {
   // jsonSchema7, not openApi3: OpenAPI 3.0 emits boolean `exclusiveMinimum`, which providers that
   // validate against JSON Schema 2020-12 (e.g. Groq) reject.
   const js = zodToJsonSchema(schema, { $refStrategy: "none", target: "jsonSchema7", pipeStrategy: "input" }) as Record<string, unknown>;
@@ -686,8 +761,9 @@ function jsonSchemaFor(schema: ZodTypeAny, opts: { hide?: string[]; categoryEnum
   if (!js.properties) js.properties = {};
   const props = js.properties as Record<string, Record<string, unknown>>;
   for (const h of opts.hide ?? []) delete props[h];
-  // Categories are listed once in the system prompt and in addExpense; elsewhere the enum is redundant.
-  if (!opts.categoryEnum && props.category?.enum) delete props.category.enum;
+  // Categories are listed once in the system prompt; an enum here costs tokens, and Groq rejects
+  // the whole call when the model sends a name outside it, so the server normalizes instead.
+  if (props.category?.enum) delete props.category.enum;
   // Models often send null for an omitted optional, and Groq rejects the whole call ("tool_use_failed")
   // if the schema doesn't allow it. Accept null here; stripNulls drops it before Zod validates.
   const required = new Set((js.required as string[] | undefined) ?? []);
@@ -718,7 +794,7 @@ export const TOOL_DEFINITIONS: ToolDefinition[] = TOOLS.map((t) => ({
   function: {
     name: t.name,
     description: t.description,
-    parameters: jsonSchemaFor(t.schema, { hide: t.hiddenArgs, categoryEnum: t.name === CATEGORY_ENUM_TOOL }),
+    parameters: jsonSchemaFor(t.schema, { hide: t.hiddenArgs }),
   },
 }));
 

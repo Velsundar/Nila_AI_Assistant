@@ -22,16 +22,16 @@ describe("mock parser", () => {
   });
 
   it.each([
-    ["spent 250 on lunch at swiggy", { tool: "addExpense", args: { amount: 250, category: "Food", merchant: "Swiggy", note: "lunch" } }],
-    ["paid 1200 for uber yesterday", { tool: "addExpense", args: { amount: 1200, category: "Transport", merchant: "Uber", date: "2026-10-29" } }],
-    ["spent 499 at amazon", { tool: "addExpense", args: { amount: 499, category: "Shopping", merchant: "Amazon" } }],
-    ["paid 15000 rent", { tool: "addExpense", args: { amount: 15000, category: "Rent" } }],
-    ["spent 600 on medicines 2 days ago", { tool: "addExpense", args: { amount: 600, category: "Health", note: "medicines", date: "2026-10-28" } }],
+    ["spent 250 on lunch at swiggy", { tool: "addExpense", args: { amount: 250, category: "Food", subcategory: "Swiggy", merchant: "Swiggy", note: "lunch" } }],
+    ["paid 1200 for uber yesterday", { tool: "addExpense", args: { amount: 1200, category: "Transportation", subcategory: "Cab", merchant: "Uber", date: "2026-10-29" } }],
+    ["spent 499 at amazon", { tool: "addExpense", args: { amount: 499, category: "Shopping", subcategory: "Amazon", merchant: "Amazon" } }],
+    ["paid 15000 rent", { tool: "addExpense", args: { amount: 15000, category: "Rent", subcategory: "House rent" } }],
+    ["spent 600 on medicines 2 days ago", { tool: "addExpense", args: { amount: 600, category: "Health", subcategory: "Medicine", note: "medicines", date: "2026-10-28" } }],
     ["how much did I spend on food this month", { tool: "getSpendingSummary", args: { category: "Food" } }],
     ["how much did i spend last month", { tool: "getSpendingSummary", args: { from: "2026-09-01", to: "2026-09-30" } }],
     ["how much did I spend today", { tool: "getSpendingSummary", args: { from: "2026-10-30", to: "2026-10-30" } }],
     ["set food budget to 5000", { tool: "setBudget", args: { category: "Food", monthlyLimit: 5000 } }],
-    ["set my transport budget at 3k", { tool: "setBudget", args: { category: "Transport", monthlyLimit: 3000 } }],
+    ["set my transport budget at 3k", { tool: "setBudget", args: { category: "Transportation", monthlyLimit: 3000 } }],
     ["what are my budgets", { tool: "getBudgets", args: {} }],
     ["delete my last expense", { tool: "deleteExpense", args: {} }],
     ["remove the swiggy expense", { tool: "deleteExpense", args: { match: { merchant: "swiggy" } } }],

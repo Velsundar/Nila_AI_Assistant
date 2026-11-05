@@ -33,7 +33,7 @@ describe("POST /api/agent (mock provider)", () => {
   it("resolves 'yesterday' in the user's timezone", async () => {
     const { auth } = await registerUser();
     const r = await agent(auth, "paid 1200 for uber yesterday");
-    expect(r.actions[0].args).toMatchObject({ amount: 1200, category: "Transport", merchant: "Uber", date: addDays(today(), -1) });
+    expect(r.actions[0].args).toMatchObject({ amount: 1200, category: "Transportation", subcategory: "Cab", merchant: "Uber", date: addDays(today(), -1) });
     const e = (await api().get("/api/expenses").set(auth)).body.expenses[0];
     expect(localDateString(new Date(e.date), TZ)).toBe(addDays(today(), -1));
     expect(r.reply).toContain("yesterday");

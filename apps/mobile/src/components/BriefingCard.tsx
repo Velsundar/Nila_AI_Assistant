@@ -1,7 +1,7 @@
 import Ionicons from "@expo/vector-icons/Ionicons";
 import { router } from "expo-router";
 import { Pressable, StyleSheet, Text, View } from "react-native";
-import type { DailyBriefing, Weather } from "@nova/shared";
+import type { DailyBriefing, Reminder, Weather } from "@nova/shared";
 
 import { Button, Card } from "@/components/ui";
 import { Colors, Font, Radius, Spacing } from "@/constants/theme";
@@ -31,9 +31,11 @@ type Props = {
   hasCity: boolean;
   speaking: boolean;
   onReadAloud: () => void;
+  /** Confirm + delete a reminder (the parent removes it optimistically). Hidden when absent. */
+  onDeleteReminder?: (r: Reminder) => void;
 };
 
-export function BriefingCard({ briefing: b, currency, hasCity, speaking, onReadAloud }: Props) {
+export function BriefingCard({ briefing: b, currency, hasCity, speaking, onReadAloud, onDeleteReminder }: Props) {
   const overdue = b.tasksDue.filter((t) => t.dueDate && localISODate(new Date(t.dueDate)) < b.date).length;
   return (
     <Card style={styles.card}>
@@ -68,12 +70,34 @@ export function BriefingCard({ briefing: b, currency, hasCity, speaking, onReadA
         <View style={styles.block}>
           <Text style={styles.blockTitle}>Reminders today</Text>
           {b.reminders.map((r) => (
-            <View key={r.id} style={styles.line} accessible accessibilityLabel={`Reminder at ${timeOf(r.dateTime)}: ${r.text}`}>
-              <Ionicons name="alarm-outline" size={15} color={Colors.accent} />
-              <Text style={styles.lineTime}>{timeOf(r.dateTime)}</Text>
-              <Text style={styles.lineText} numberOfLines={2}>
-                {r.text}
-              </Text>
+            <View key={r.id} style={styles.line}>
+              <Pressable
+                onLongPress={onDeleteReminder ? () => onDeleteReminder(r) : undefined}
+                delayLongPress={350}
+                disabled={!onDeleteReminder}
+                accessibilityLabel={`Reminder at ${timeOf(r.dateTime)}: ${r.text}`}
+                accessibilityHint={onDeleteReminder ? "Long press to delete" : undefined}
+                accessibilityActions={onDeleteReminder ? [{ name: "delete", label: "Delete reminder" }] : undefined}
+                onAccessibilityAction={(ev) => ev.nativeEvent.actionName === "delete" && onDeleteReminder?.(r)}
+                style={styles.lineMain}
+              >
+                <Ionicons name="alarm-outline" size={15} color={Colors.accent} />
+                <Text style={styles.lineTime}>{timeOf(r.dateTime)}</Text>
+                <Text style={styles.lineText} numberOfLines={2}>
+                  {r.text}
+                </Text>
+              </Pressable>
+              {onDeleteReminder && (
+                <Pressable
+                  onPress={() => onDeleteReminder(r)}
+                  accessibilityRole="button"
+                  accessibilityLabel={`Delete reminder: ${r.text}`}
+                  hitSlop={8}
+                  style={({ pressed }) => [styles.trash, pressed && { opacity: 0.6 }]}
+                >
+                  <Ionicons name="trash-outline" size={17} color={Colors.textFaint} />
+                </Pressable>
+              )}
             </View>
           ))}
         </View>
@@ -172,6 +196,8 @@ const styles = StyleSheet.create({
   block: { gap: 6 },
   blockTitle: { color: Colors.textDim, ...Font.tiny, fontWeight: "700" },
   line: { flexDirection: "row", alignItems: "center", gap: Spacing.sm },
+  lineMain: { flex: 1, flexDirection: "row", alignItems: "center", gap: Spacing.sm, minHeight: 36 },
+  trash: { width: 36, height: 36, alignItems: "center", justifyContent: "center" },
   lineTime: { color: Colors.accent, ...Font.small, fontWeight: "700", minWidth: 62 },
   lineText: { color: Colors.text, ...Font.body, flex: 1 },
   alerts: { flexDirection: "row", flexWrap: "wrap", gap: 6 },

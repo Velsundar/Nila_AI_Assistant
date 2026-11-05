@@ -9,18 +9,58 @@ export const DEFAULT_CURRENCY = "INR";
 export const CATEGORIES = [
   "Food",
   "Groceries",
-  "Transport",
   "Shopping",
-  "Bills",
+  "Housing",
   "Rent",
-  "Entertainment",
+  "Transportation",
+  "Vehicle",
+  "Bills",
+  "Life & Entertainment",
   "Health",
   "Education",
   "Travel",
+  "Investments",
+  "Savings & Insurance",
   "Other",
 ] as const;
 export const CategorySchema = z.enum(CATEGORIES);
 export type Category = z.infer<typeof CategorySchema>;
+
+/** Names used before v5. The server migrates stored data and maps these on input. */
+export const LEGACY_CATEGORIES: Record<string, Category> = {
+  Transport: "Transportation",
+  Entertainment: "Life & Entertainment",
+};
+
+/**
+ * Suggested subcategories per category, for pickers and for the server's inference from
+ * merchant/note ("swiggy" → Food / Swiggy). Stored as free text (max 40 chars), so users can
+ * type their own; the server snaps near-matches to these spellings.
+ */
+export const SUBCATEGORIES: Record<Category, readonly string[]> = {
+  Food: ["Local shop", "Restaurant", "Swiggy", "Zomato", "Zepto", "Tea & snacks"],
+  Groceries: ["Local store", "Supermarket", "Zepto", "Blinkit", "BigBasket", "Instamart"],
+  Shopping: ["Amazon", "Flipkart", "Myntra", "Meesho", "Clothes", "Electronics"],
+  Housing: ["Maintenance", "Repairs", "Furniture", "Household"],
+  Rent: ["House rent", "Deposit"],
+  Transportation: ["Long distance", "Public transport", "Auto", "Metro", "Bus", "Rapido", "Cab", "Train", "Flight"],
+  Vehicle: ["Fuel", "Insurance", "Maintenance", "Parking", "Toll"],
+  Bills: ["Mobile & network", "Internet", "Electricity", "Water", "Gas"],
+  "Life & Entertainment": ["OTT", "Theatre", "Events", "Games", "Outing"],
+  Health: ["Medicine", "Doctor", "Gym"],
+  Education: ["Course", "Books", "Fees"],
+  Travel: ["Hotel", "Trip"],
+  Investments: ["Sent to Dad", "Mutual fund / SIP", "Stocks", "Fixed deposit", "Gold"],
+  "Savings & Insurance": ["Health insurance", "Term insurance", "Savings", "Emergency fund"],
+  Other: [],
+};
+
+/**
+ * "saving" categories are money set aside (investments, money sent to Dad, insurance), not
+ * consumption: analysis reports them as invested/saved rather than spent. Everything else is "spending".
+ */
+export const SAVING_CATEGORIES: readonly Category[] = ["Investments", "Savings & Insurance"];
+export const categoryGroup = (c: Category): "spending" | "saving" => (SAVING_CATEGORIES.includes(c) ? "saving" : "spending");
 
 const DATE_ONLY = /^(\d{4})-(\d{2})-(\d{2})$/;
 const DATE_TIME = /^(\d{4})-(\d{2})-(\d{2})T\d{2}:\d{2}(:\d{2}(\.\d{1,3})?)?(Z|[+-]\d{2}:\d{2})$/;
@@ -88,6 +128,8 @@ export const ExpenseSchema = z.object({
   id: z.string(),
   amount: z.number().positive(),
   category: CategorySchema,
+  /** Free text; see SUBCATEGORIES for the suggested values per category. */
+  subcategory: z.string().optional(),
   merchant: z.string().optional(),
   note: z.string().optional(),
   date: isoDate,
@@ -99,6 +141,7 @@ export type Expense = z.infer<typeof ExpenseSchema>;
 export const CreateExpenseSchema = z.object({
   amount: z.number().positive().max(100_000_000),
   category: CategorySchema,
+  subcategory: z.string().max(40).optional(), // empty string clears it on update
   merchant: z.string().max(100).optional(),
   note: z.string().max(500).optional(),
   date: isoDate.optional(), // defaults to now on the server
@@ -124,6 +167,8 @@ export type SpendingSummary = {
   count: number;
   byCategory: { category: Category; total: number; count: number }[];
   byDay: { date: string; total: number }[]; // date = "YYYY-MM-DD"
+  /** Present when the request was for one category: its subcategory split (missing ones as "Other"). */
+  bySubcategory?: { subcategory: string; total: number; count: number }[];
 };
 
 // ---------- Income (money received: salary, refunds, someone paying you back) ----------
@@ -174,6 +219,81 @@ export type IncomeSummary = {
   count: number;
   byCategory: { category: IncomeCategory; total: number; count: number }[];
 };
+
+// ---------- Ledger: money in and out together, with a running balance ----------
+
+/**
+ * The balance resets each pay cycle: a cycle starts on the day of the latest Salary income.
+ * With no Salary income in the last 45 days, the cycle is the calendar month. No carry-over.
+ */
+export type LedgerPeriod = "salary-cycle" | "month" | "custom";
+
+export type LedgerEntry = {
+  kind: "income" | "expense";
+  id: string;
+  date: string; // ISO
+  /** Positive for income, negative for expenses. */
+  amount: number;
+  /** Payer / merchant / note / category, whichever is most specific. */
+  label: string;
+  category: string; // a Category or an IncomeCategory
+  subcategory?: string;
+  /** Balance after this entry, from the start of the period (oldest first). */
+  balance: number;
+};
+
+export type Ledger = {
+  period: LedgerPeriod;
+  from: string; // ISO
+  to: string; // ISO
+  /** Oldest first, so the running balance reads top to bottom. */
+  entries: LedgerEntry[];
+  totals: {
+    received: number;
+    /** Consumption: every category except SAVING_CATEGORIES. */
+    spent: number;
+    /** Investments + Savings & Insurance. */
+    invested: number;
+    /** received − spent − invested. */
+    balance: number;
+  };
+};
+
+export const LedgerQuerySchema = z.object({
+  /** "cycle" (default) = salary cycle, falling back to the calendar month; "month" = a calendar month. */
+  period: z.enum(["cycle", "month"]).default("cycle"),
+  /** With period=month: "YYYY-MM" (default this month). */
+  month: z.string().regex(/^\d{4}-\d{2}$/).optional(),
+});
+export type LedgerQuery = z.input<typeof LedgerQuerySchema>;
+
+// ---------- Trends & savings analysis ----------
+
+export type MonthTrend = {
+  month: string; // "YYYY-MM" in the user's timezone
+  received: number;
+  spent: number;
+  invested: number;
+  /** received − spent: money not consumed (includes what was invested). */
+  saved: number;
+  /** saved / received × 100, rounded; null when nothing was received. */
+  savingsRate: number | null;
+  topCategories: { category: Category; total: number }[]; // spending only, top 3
+};
+
+export type TrendsResult = {
+  /** Oldest first, ending with the current month (partial). */
+  months: MonthTrend[];
+  /** Current month vs the previous one, spending only. null when last month had no spending. */
+  spentChangePercent: number | null;
+  /** Spending categories that changed most vs last month. */
+  categoryChanges: { category: Category; thisMonth: number; lastMonth: number; changePercent: number | null }[];
+  /** Mean monthly spending over the complete months in the window. */
+  averageMonthlySpent: number;
+};
+
+export const TrendsQuerySchema = z.object({ months: z.coerce.number().int().min(2).max(12).default(6) });
+export type TrendsQuery = z.input<typeof TrendsQuerySchema>;
 
 // ---------- Budgets ----------
 
