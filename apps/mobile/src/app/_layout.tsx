@@ -37,10 +37,11 @@ function RootNavigator() {
   const signedIn = status === "signedIn";
   return (
     <Stack screenOptions={{ headerShown: false, contentStyle: { backgroundColor: Colors.bg } }}>
-      <Stack.Protected guard={signedIn}>
+      {/* A fresh install opens at "/" (the Assistant tab) while signed out: send it to login. */}
+      <Stack.Protected guard={signedIn} redirectTo="/login">
         <Stack.Screen name="(tabs)" />
       </Stack.Protected>
-      <Stack.Protected guard={!signedIn}>
+      <Stack.Protected guard={!signedIn} redirectTo="/">
         <Stack.Screen name="(auth)" />
       </Stack.Protected>
     </Stack>
